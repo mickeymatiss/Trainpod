@@ -3,7 +3,38 @@ import CoreBluetooth
 import Foundation
 
 @MainActor
-final class BluetoothManager: NSObject, ObservableObject {
+final class BluetoothService: NSObject, ObservableObject {
+    enum BLEWriteMode: String, CaseIterable, Identifiable {
+        case withResponse = "With Response"
+        case withoutResponse = "Without Response"
+
+        var id: String { rawValue }
+
+        var characteristicWriteType: CBCharacteristicWriteType {
+            switch self {
+            case .withResponse: return .withResponse
+            case .withoutResponse: return .withoutResponse
+            }
+        }
+    }
+
+    enum BLETransportError: LocalizedError {
+        case notReady
+        case unsupportedWriteMode(BLEWriteMode)
+        case writeFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notReady:
+                return "CTA Tracker is not ready for writes."
+            case .unsupportedWriteMode(let mode):
+                return "CTA Tracker does not support Write \(mode.rawValue)."
+            case .writeFailed(let message):
+                return message
+            }
+        }
+    }
+
     enum ConnectionState: Equatable {
         case disconnected
         case scanning
@@ -35,18 +66,25 @@ final class BluetoothManager: NSObject, ObservableObject {
     static let deviceName = "CTA Tracker"
     static let serviceUUID = CBUUID(string: "7A1C0001-8F4A-4D2B-9A57-1C2D3E4F5001")
     static let characteristicUUID = CBUUID(string: "7A1C0002-8F4A-4D2B-9A57-1C2D3E4F5001")
-    private static let dummyPayload = "Morgan|54th/Cermak or Harlem/Lake|Pink:E27EA6:1,3;Green:009B3A:5|Loop or 63rd St|Green:009B3A:5,11;Pink:E27EA6:8"
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
-    @Published private(set) var lastSentPayload: String?
+    @Published private(set) var connectedDeviceName: String?
+    @Published private(set) var maximumWriteValueLength: Int?
     @Published private(set) var debugMessages: [String] = []
     @Published var showsAllDebugMessages = false {
         didSet { rebuildDebugMessages() }
     }
 
+    var receivedDataHandler: ((Data) -> Void)?
+    var readyHandler: (() -> Void)?
+    var connectionStateHandler: ((ConnectionState) -> Void)?
+
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var writableCharacteristic: CBCharacteristic?
+    private var pendingWriteContinuation: CheckedContinuation<Void, Error>?
+    private var pendingWithoutResponseContinuation: CheckedContinuation<Void, Error>?
+    private var writeInProgress = false
     private var allDebugMessages: [DebugMessage] = []
     private var autoScanEnabled = true
     private var userRequestedDisconnect = false
@@ -54,7 +92,7 @@ final class BluetoothManager: NSObject, ObservableObject {
     override init() {
         super.init()
         central = CBCentralManager(delegate: self, queue: nil)
-        log("Bluetooth manager initialized")
+        log("Bluetooth service initialized")
         log("Expected name: \(Self.deviceName)")
         log("Expected service UUID: \(Self.serviceUUID.uuidString)")
         log("Expected characteristic UUID: \(Self.characteristicUUID.uuidString)")
@@ -65,6 +103,10 @@ final class BluetoothManager: NSObject, ObservableObject {
             return true
         }
         return false
+    }
+
+    var notificationsReady: Bool {
+        canSend && writableCharacteristic?.isNotifying == true
     }
 
     func scanAndConnect() {
@@ -92,6 +134,8 @@ final class BluetoothManager: NSObject, ObservableObject {
 
         writableCharacteristic = nil
         peripheral = nil
+        connectedDeviceName = nil
+        maximumWriteValueLength = nil
         setConnectionState(.scanning)
         backgroundLog("scan started: \(reason)")
         log("Scan start: withServices=nil, filtering by advertised/peripheral name \(Self.deviceName), reason: \(reason)")
@@ -110,6 +154,9 @@ final class BluetoothManager: NSObject, ObservableObject {
         central.stopScan()
         self.peripheral = nil
         writableCharacteristic = nil
+        connectedDeviceName = nil
+        maximumWriteValueLength = nil
+        resumePendingWrite(with: .failure(BLETransportError.writeFailed("Disconnected before write completed.")))
         setConnectionState(.disconnected)
     }
 
@@ -119,54 +166,89 @@ final class BluetoothManager: NSObject, ObservableObject {
         log("Debug log cleared")
     }
 
-    func sendTrainData(
-        stationName: String,
-        direction1Name: String,
-        direction1ETAs: [Int],
-        direction2Name: String,
-        direction2ETAs: [Int]
-    ) {
-        let payload = [
-            stationName,
-            direction1Name,
-            direction1ETAs.prefix(3).map(String.init).joined(separator: ","),
-            direction2Name,
-            direction2ETAs.prefix(3).map(String.init).joined(separator: ",")
-        ].joined(separator: "|")
-
-        send(payload)
+    func maximumWriteValueLength(for mode: BLEWriteMode) -> Int {
+        peripheral?.maximumWriteValueLength(for: mode.characteristicWriteType) ?? 0
     }
 
-    func sendPayload(_ payload: String) {
-        send(payload)
+    var preferredWriteMode: BLEWriteMode {
+        writableCharacteristic?.properties.contains(.write) == true ? .withResponse : .withoutResponse
     }
 
-    func sendTestData() {
-        send(Self.dummyPayload)
-    }
-
-    private func send(_ payload: String) {
+    /// One transport write only. Logical fragmentation belongs to MessageBridge.
+    func write(_ data: Data, mode: BLEWriteMode) async throws {
+        try Task.checkCancellation()
         guard let peripheral, let characteristic = writableCharacteristic else {
-            setConnectionState(.error("CTA Tracker is not ready for writes."))
-            log("Write failed: missing peripheral or writable characteristic")
+            throw BLETransportError.notReady
+        }
+
+        guard supports(mode, characteristic: characteristic) else {
+            throw BLETransportError.unsupportedWriteMode(mode)
+        }
+
+        guard data.count <= maximumWriteValueLength(for: mode) else {
+            throw BLETransportError.writeFailed("Transport write exceeds the negotiated maximum.")
+        }
+        guard !writeInProgress else {
+            throw BLETransportError.writeFailed("A transport write is already pending.")
+        }
+        writeInProgress = true
+        defer { writeInProgress = false }
+        try await writeChunk(data, to: characteristic, on: peripheral, type: mode.characteristicWriteType)
+    }
+
+    private func supports(_ mode: BLEWriteMode, characteristic: CBCharacteristic) -> Bool {
+        switch mode {
+        case .withResponse:
+            return characteristic.properties.contains(.write)
+        case .withoutResponse:
+            return characteristic.properties.contains(.writeWithoutResponse)
+        }
+    }
+
+    private func writeChunk(
+        _ data: Data,
+        to characteristic: CBCharacteristic,
+        on peripheral: CBPeripheral,
+        type: CBCharacteristicWriteType
+    ) async throws {
+        switch type {
+        case .withResponse:
+            try await withCheckedThrowingContinuation { continuation in
+                pendingWriteContinuation = continuation
+                peripheral.writeValue(data, for: characteristic, type: type)
+            }
+        case .withoutResponse:
+            while !peripheral.canSendWriteWithoutResponse {
+                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                    pendingWithoutResponseContinuation = continuation
+                }
+                try Task.checkCancellation()
+                guard self.peripheral === peripheral else { throw BLETransportError.notReady }
+            }
+            peripheral.writeValue(data, for: characteristic, type: type)
+        @unknown default:
+            throw BLETransportError.writeFailed("Unknown BLE write type.")
+        }
+    }
+
+    private func resumePendingWrite(with result: Result<Void, Error>) {
+        if case .failure(let error) = result, let waiting = pendingWithoutResponseContinuation {
+            pendingWithoutResponseContinuation = nil
+            waiting.resume(throwing: error)
+        }
+        guard let continuation = pendingWriteContinuation else {
             return
         }
 
-        guard let data = payload.data(using: .utf8) else {
-            setConnectionState(.error("Could not encode train data as UTF-8."))
-            log("Write failed: payload is not valid UTF-8")
-            return
-        }
-
-        let writeType: CBCharacteristicWriteType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
-        log("Writing \(data.count) bytes using \(writeType.debugName): \(payload)")
-        peripheral.writeValue(data, for: characteristic, type: writeType)
-        lastSentPayload = payload
+        pendingWriteContinuation = nil
+        continuation.resume(with: result)
     }
 
     private func setConnectionState(_ state: ConnectionState) {
         connectionState = state
         log("State: \(state.title) - \(state.message)")
+        connectionStateHandler?(state)
+        if state == .connected { readyHandler?() }
     }
 
     private func log(_ message: String, isRelevant: Bool = true) {
@@ -264,7 +346,7 @@ private struct DebugMessage {
     let isRelevant: Bool
 }
 
-extension BluetoothManager: CBCentralManagerDelegate {
+extension BluetoothService: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
             log("Central state changed: \(central.state.debugName)")
@@ -364,6 +446,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
             log("didFailToConnect: \(message)")
             self.peripheral = nil
             writableCharacteristic = nil
+            connectedDeviceName = nil
+            maximumWriteValueLength = nil
+            resumePendingWrite(with: .failure(BLETransportError.writeFailed(message)))
 
             if autoScanEnabled {
                 log("Restarting scan after connect failure")
@@ -382,6 +467,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
         Task { @MainActor in
             writableCharacteristic = nil
             self.peripheral = nil
+            connectedDeviceName = nil
+            maximumWriteValueLength = nil
+            resumePendingWrite(with: .failure(BLETransportError.writeFailed(error?.localizedDescription ?? "Peripheral disconnected.")))
 
             if let error {
                 backgroundLog("disconnected: \(error.localizedDescription)")
@@ -404,7 +492,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     }
 }
 
-extension BluetoothManager: CBPeripheralDelegate {
+extension BluetoothService: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor in
             if let error {
@@ -461,11 +549,52 @@ extension BluetoothManager: CBPeripheralDelegate {
             }
 
             writableCharacteristic = characteristic
+            connectedDeviceName = peripheral.name ?? Self.deviceName
+            maximumWriteValueLength = peripheral.maximumWriteValueLength(for: .withResponse)
             backgroundLog("writable characteristic discovered: \(characteristic.uuid.uuidString) [\(characteristic.properties.debugNames)]")
             log("Writable characteristic ready: \(characteristic.properties.debugNames)")
-            setConnectionState(.connected)
-            backgroundLog("AUTO-SEND: \(Self.dummyPayload)")
-            sendTestData()
+            log("Maximum write length with response: \(peripheral.maximumWriteValueLength(for: .withResponse))")
+            log("Maximum write length without response: \(peripheral.maximumWriteValueLength(for: .withoutResponse))")
+            if characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) {
+                setConnectionState(.connecting)
+                peripheral.setNotifyValue(true, for: characteristic)
+                log("Requesting ACK notification subscription")
+            } else {
+                setConnectionState(.connected)
+            }
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        // Capture callback data before hopping to the main actor; the characteristic is mutable.
+        let received = characteristic.value
+        Task { @MainActor in
+            guard peripheral === self.peripheral, characteristic === writableCharacteristic else { return }
+            if let error {
+                log("Notification update failed: \(error.localizedDescription)")
+                return
+            }
+
+            guard let data = received else {
+                log("Notification update had no data")
+                return
+            }
+
+            receivedDataHandler?(data)
+        }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        Task { @MainActor in
+            guard peripheral === self.peripheral, characteristic === writableCharacteristic else { return }
+            if let error {
+                setConnectionState(.error("ACK subscription failed: \(error.localizedDescription)"))
+            } else if characteristic.isNotifying {
+                log("ACK notification subscription confirmed")
+                setConnectionState(.connected)
+            } else {
+                setConnectionState(.error("ACK notifications are disabled. Reconnect before testing."))
+            }
         }
     }
 
@@ -478,11 +607,24 @@ extension BluetoothManager: CBPeripheralDelegate {
             if let error {
                 backgroundLog("auto-send failed: \(error.localizedDescription)")
                 log("Write response failed: \(error.localizedDescription)")
+                resumePendingWrite(with: .failure(BLETransportError.writeFailed(error.localizedDescription)))
                 setConnectionState(.error(error.localizedDescription))
             } else {
                 backgroundLog("auto-send/write callback succeeded")
                 log("Write response received for \(characteristic.uuid.uuidString)")
+                resumePendingWrite(with: .success(()))
             }
+        }
+    }
+
+    nonisolated func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        Task { @MainActor in
+            guard let continuation = pendingWithoutResponseContinuation else {
+                return
+            }
+
+            pendingWithoutResponseContinuation = nil
+            continuation.resume()
         }
     }
 }

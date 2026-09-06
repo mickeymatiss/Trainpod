@@ -2,8 +2,16 @@ import SwiftUI
 
 struct NearbyStationsView: View {
     @StateObject private var viewModel = NearbyStationsViewModel()
-    @StateObject private var bluetooth = BluetoothManager()
+    @StateObject private var bluetooth: BluetoothService
+    @StateObject private var bridge: MessageBridge
+    @State private var autoSendDummyOnConnect = false
     @State private var isSendingFreshLiveData = false
+
+    init() {
+        let bluetooth = BluetoothService()
+        _bluetooth = StateObject(wrappedValue: bluetooth)
+        _bridge = StateObject(wrappedValue: MessageBridge(bluetooth: bluetooth, wireFormat: .plainText))
+    }
 
     var body: some View {
         List {
@@ -26,6 +34,11 @@ struct NearbyStationsView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Nearby Trains")
+        .onAppear {
+            bluetooth.readyHandler = {
+                if autoSendDummyOnConnect { sendTransitPayload(TransitMessage.dummyPayload) }
+            }
+        }
         .onDisappear {
             viewModel.stopRefreshing()
         }
@@ -42,6 +55,7 @@ struct NearbyStationsView: View {
             }
 
             Button {
+                autoSendDummyOnConnect = true
                 bluetooth.scanAndConnect()
             } label: {
                 Label("Connect CTA Tracker", systemImage: "antenna.radiowaves.left.and.right")
@@ -56,7 +70,7 @@ struct NearbyStationsView: View {
             .disabled(bluetooth.connectionState == .disconnected)
 
             Button {
-                bluetooth.sendTestData()
+                sendTransitPayload(TransitMessage.dummyPayload)
             } label: {
                 Label("Send Test Data", systemImage: "paperplane")
             }
@@ -72,10 +86,14 @@ struct NearbyStationsView: View {
                 }
             }
 
-            if let payload = bluetooth.lastSentPayload {
-                Text(payload)
+            if let payload = bridge.lastSentMessage {
+                Text(String(decoding: payload, as: UTF8.self))
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
+            }
+
+            if let error = bridge.lastError {
+                Text(error).font(.caption).foregroundStyle(.red)
             }
 
             if !bluetooth.debugMessages.isEmpty {
@@ -188,7 +206,14 @@ struct NearbyStationsView: View {
             lineGroups(from: source.directions[1].trains).joined(separator: ";")
         ].joined(separator: "|")
 
-        bluetooth.sendPayload(payload)
+        sendTransitPayload(payload)
+    }
+
+    private func sendTransitPayload(_ payload: String) {
+        Task {
+            do { try await bridge.send(TransitMessage.encode(payload), mode: bluetooth.preferredWriteMode) }
+            catch { /* MessageBridge publishes the send error for this view. */ }
+        }
     }
 
     private func cleanDirectionName(_ name: String) -> String {

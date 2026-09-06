@@ -2,8 +2,20 @@ import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        NavigationStack {
-            NearbyStationsView()
+        TabView {
+            NavigationStack {
+                NearbyStationsView()
+            }
+            .tabItem {
+                Label("Nearby", systemImage: "tram")
+            }
+
+            NavigationStack {
+                BLETestView()
+            }
+            .tabItem {
+                Label("BLE Test", systemImage: "antenna.radiowaves.left.and.right")
+            }
         }
     }
 }
