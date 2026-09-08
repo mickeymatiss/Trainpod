@@ -9,9 +9,19 @@
 BleWakeTest wakeTest;
 #include "BleIntegration.h"
 #include "RefreshFlow.h"
+#include "MetricsStore.h"
 static RefreshFlow refreshFlow;
+// One episode spans NEED_DATA retries; the first terminal result wins.
+// Keep a failed episode open until data arrives, disconnect, or standby, so
+// repeated lower-level failures cannot inflate either attempts or outcomes.
+static bool fetchEpisode = false;
+static void failFetchEpisode() {
+  if (!fetchEpisode) return;
+  MetricsStore::shared().recordFetchFailure();
+  MetricsStore::shared().recordBootDataFailure();
+}
 static void (*refreshStarted)()=nullptr;
-static bool e2eConnected=false, e2eReceiving=false;
+static bool e2eConnected=false, e2eDisconnected=false, e2eReceiving=false;
 static bool sawRefreshBytes=false;
 
 
@@ -82,7 +92,7 @@ class TestCallbacks: public NimBLECharacteristicCallbacks {
       }
       if(wireMode==0 && value.size()!=0) wireMode=uint8_t(value[0])==0xc0 ? 1 : 2;
       if(wireMode==1) receiver.accept(reinterpret_cast<const uint8_t*>(value.data()),value.size(),arrival);
-      else if(value.size()!=0) {
+      else if(value.size()!=0 && !refreshFlow.paused()) {
         transitText.accept(value.data(),value.size(),arrival);
       }
     }
@@ -97,19 +107,29 @@ class TestCallbacks: public NimBLECharacteristicCallbacks {
 class ServerCallbacks: public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* server,NimBLEConnInfo& info) override {
     xSemaphoreTake(receiverMutex,portMAX_DELAY);
+    // A peripheral does not see the central's scans/failed over-air attempts.
+    // Count only concrete incoming connections presented by NimBLE.
+    MetricsStore::shared().recordBleAttempt();
     if(peer==BLE_HS_CONN_HANDLE_NONE && wakeTest.onConnected(info.getConnHandle())) {
+      MetricsStore::shared().recordBleSuccess();
       peer=info.getConnHandle(); subscribed=false; wireMode=0; transitText.reset();
       refreshFlow.onConnected();
       e2eConnected=true;
     }
-    else server->disconnect(info.getConnHandle());
+    else {
+      MetricsStore::shared().recordBleFailure();
+      server->disconnect(info.getConnHandle());
+    }
     xSemaphoreGive(receiverMutex);
   }
   void onDisconnect(NimBLEServer*,NimBLEConnInfo& info,int) override {
     xSemaphoreTake(receiverMutex,portMAX_DELAY);
     if(info.getConnHandle()==peer) {
+      failFetchEpisode();
+      fetchEpisode=false;
       subscribed=false; peer=BLE_HS_CONN_HANDLE_NONE; wireMode=0; transitText.reset();
       refreshFlow.onDisconnected();
+      e2eDisconnected=true;
       if(wakeTest.enabled()) receiver.reset(); else receiver.disconnect();
     }
     xSemaphoreGive(receiverMutex);
@@ -174,14 +194,37 @@ void printRawWrite(const RawWrite& raw) {
   Serial.println();
 }
 
-// The only REFRESH_REQUEST write. Called with receiverMutex held.
+// The only NEED_DATA notification. Called with receiverMutex held.
 static bool requestRefresh(uint32_t now,bool& sent) {
+  if(wakeTest.enabled() || wireMode==1) return false;
   if(!refreshFlow.requestRefresh(now,peer!=BLE_HS_CONN_HANDLE_NONE,subscribed)) return false;
-  sawRefreshBytes=false;
-  static const uint8_t request[]="REFRESH_REQUEST";
+  if(!fetchEpisode) {
+    fetchEpisode=true;
+    MetricsStore::shared().recordFetchAttempt();
+  }
+  // Never reset a partially received transfer merely because a retry is due.
+  static const uint8_t request[]="NEED_DATA";
   sent=characteristic->notify(request,sizeof(request)-1,peer);
   refreshFlow.sent(sent);
+  if(!sent) failFetchEpisode();
   return true;
+}
+
+static void printMetrics() {
+  const auto m=MetricsStore::shared().get();
+  Serial.println("[METRICS] Current aggregate (RAM snapshot)");
+  Serial.printf("version=%lu bootCount=%lu buttonPressCount=%lu\n",
+    (unsigned long)m.version,(unsigned long)m.bootCount,(unsigned long)m.buttonPressCount);
+  Serial.printf("bootDataSuccessCount=%lu bootDataFailureCount=%lu startupPending=%lu\n",
+    (unsigned long)m.bootDataSuccessCount,(unsigned long)m.bootDataFailureCount,(unsigned long)m.startupPending);
+  Serial.printf("latencyUnder2s=%lu latency2To4s=%lu latency4To8s=%lu latency8To15s=%lu latencyOver15s=%lu\n",
+    (unsigned long)m.latencyUnder2s,(unsigned long)m.latency2To4s,(unsigned long)m.latency4To8s,
+    (unsigned long)m.latency8To15s,(unsigned long)m.latencyOver15s);
+  Serial.printf("bleConnectAttempts=%lu bleConnectSuccesses=%lu bleConnectFailures=%lu\n",
+    (unsigned long)m.bleConnectAttempts,(unsigned long)m.bleConnectSuccesses,(unsigned long)m.bleConnectFailures);
+  Serial.printf("fetchAttempts=%lu fetchSuccesses=%lu fetchFailures=%lu unexpectedResetCount=%lu\n",
+    (unsigned long)m.fetchAttempts,(unsigned long)m.fetchSuccesses,(unsigned long)m.fetchFailures,
+    (unsigned long)m.unexpectedResetCount);
 }
 
 void pollBleIntegration() {
@@ -193,10 +236,12 @@ void pollBleIntegration() {
     if(c=='\r' || c=='\n') {
       if(length || overflow) {
         command[length]=0;
-        bool show=false,recognized=true;
+        bool show=false,showMetrics=false,resetMetrics=false,recognized=true;
         BLETestReceiver::Stats snapshot; uint64_t dropped;
         xSemaphoreTake(receiverMutex,portMAX_DELAY);
         if(overflow) recognized=false;
+        else if(!strcmp(command,"metrics")) showMetrics=true;
+        else if(!strcmp(command,"metrics flush")) resetMetrics=true;
         else if(!strcmp(command,"stats")) show=true;
         else if(!strcmp(command,"reset")) { receiver.reset(); xQueueReset(reports); xQueueReset(rawWrites); droppedLogs=0; droppedRawLogs=0; }
         else if(!strcmp(command,"verbose on")) receiver.setVerbose(true);
@@ -210,27 +255,40 @@ void pollBleIntegration() {
         else recognized=false;
         snapshot=receiver.stats(); dropped=droppedLogs;
         xSemaphoreGive(receiverMutex);
-        if(show) printStats(snapshot,dropped);
-        else Serial.println(recognized?"OK":"Commands: stats, reset, verbose on/off, raw on/off, ble off");
+        // Printing and NVS writes must stay outside the BLE receiver lock.
+        if(showMetrics) printMetrics();
+        else if(resetMetrics) {
+          const bool saved=MetricsStore::shared().reset();
+          Serial.println(saved ? "[METRICS] Counters cleared and saved to NVS" :
+            "[METRICS] RAM cleared, but NVS save FAILED; old persisted metrics may remain");
+        }
+        else if(show) printStats(snapshot,dropped);
+        else Serial.println(recognized?"OK":"Commands: metrics, metrics flush (clear counters), stats, reset, verbose on/off, raw on/off, ble off");
       }
       length=0; overflow=false;
     } else if(length<sizeof(command)-1) command[length++]=c;
     else overflow=true;
   }
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
-  refreshFlow.poll(millis());
-  const bool connectedEvent=e2eConnected, receivingEvent=e2eReceiving;
-  e2eConnected=e2eReceiving=false;
+  const bool connectedEvent=e2eConnected, disconnectedEvent=e2eDisconnected, receivingEvent=e2eReceiving;
+  e2eConnected=e2eDisconnected=e2eReceiving=false;
   bool requestAttempted=false, requestSent=false;
   requestAttempted=requestRefresh(millis(),requestSent);
+  const uint32_t attempt=refreshFlow.attemptCount();
+  const bool hasData=refreshFlow.hasTransitData();
+  const uint32_t age=uint32_t(millis()-refreshFlow.lastDataReceivedMs())/1000;
   receiver.poll(esp_timer_get_time());
   bool summary=receiver.takeSummary();
   auto snapshot=receiver.stats(); uint64_t dropped=droppedLogs;
   xSemaphoreGive(receiverMutex);
   if(connectedEvent) Serial.println("[E2E] BLE connected");
+  if(disconnectedEvent) Serial.println("[DATA] BLE disconnected; NEED_DATA retries suspended");
+  if(connectedEvent || requestAttempted) {
+    if(hasData) Serial.printf("[DATA] data age=%lus\n",static_cast<unsigned long>(age));
+    else Serial.println("[DATA] data age=none");
+  }
   if(requestAttempted && refreshStarted) refreshStarted();
-  if(requestAttempted) Serial.println(requestSent ? "[REFRESH] request sent" : "[REFRESH] request enqueue failed");
-  if(requestAttempted) Serial.println(requestSent ? "[E2E] REFRESH_REQUEST sent" : "[E2E] REFRESH_REQUEST enqueue failed");
+  if(requestAttempted) Serial.printf("[DATA] NEED_DATA attempt=%lu %s\n",static_cast<unsigned long>(attempt),requestSent ? "sent" : "enqueue failed; will retry");
   if(receivingEvent) Serial.println("[E2E] receiving payload");
   if(summary) printStats(snapshot,dropped);
   RawWrite raw;
@@ -261,6 +319,12 @@ void pollBleIntegration() {
 }
 
 bool bleWakeTestEnabled() { return wakeTest.enabled(); }
+bool bleIsReady() {
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  const bool ready=peer!=BLE_HS_CONN_HANDLE_NONE && subscribed;
+  xSemaphoreGive(receiverMutex);
+  return ready;
+}
 bool bleIsConnected() {
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
   bool connected=peer!=BLE_HS_CONN_HANDLE_NONE;
@@ -273,6 +337,10 @@ bool takeTransitPayload(String& payload) {
   // Legacy iOS text has no length/delimiter: collect a single send until 250 ms idle.
   if(transitText.ready(esp_timer_get_time())) {
     overflow=transitText.invalid();
+    if(overflow) {
+      refreshFlow.finish(false,millis());
+      failFetchEpisode();
+    }
     if(!overflow) {
       payload=String(transitText.text());
       ready=true;
@@ -290,13 +358,33 @@ bool transitRefreshPending() {
   xSemaphoreGive(receiverMutex);
   return pending;
 }
+void setTransitRefreshPaused(bool paused) {
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  const bool changed=refreshFlow.paused()!=paused;
+  if(changed) {
+    if(paused) { failFetchEpisode(); fetchEpisode=false; }
+    refreshFlow.setPaused(paused);
+    // Ignore a late/incomplete pre-standby response; wake will request a new board.
+    transitText.reset();
+    sawRefreshBytes=false;
+    e2eReceiving=false;
+  }
+  xSemaphoreGive(receiverMutex);
+  if(changed) Serial.println(paused ? "[DATA] Standby: NEED_DATA paused; RAM board retained" : "[DATA] Wake: needsData=true; NEED_DATA resumes");
+}
 void finishTransitRefresh(bool success) {
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  if(success) {
+    // Unsolicited valid app pushes are not device fetch attempts.
+    if(fetchEpisode) MetricsStore::shared().recordFetchSuccess();
+    fetchEpisode=false;
+  } else failFetchEpisode();
   refreshFlow.finish(success,millis());
+  if(success) sawRefreshBytes=false;
   xSemaphoreGive(receiverMutex);
   if(success) {
-    Serial.println("[REFRESH] payload received");
-    Serial.println("[REFRESH] freshness timer reset");
+    Serial.println("[DATA] Complete valid train payload received; data age reset to 0");
+    Serial.println("[DATA] NEED_DATA retries stopped");
   }
 }
 bool takeTransitRefreshFailure() {

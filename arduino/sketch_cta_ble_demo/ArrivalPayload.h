@@ -19,9 +19,21 @@ inline ArrivalPayloadResult decodeArrivalPayload(const std::string& text, Arriva
     return result;
   };
   const auto lines = split(text, '\n');
-  if (lines.size() < 4 || lines[1].empty() || lines[1].size() > 48) return ArrivalPayloadResult::invalid;
+  if (lines.size() < 5 || lines[1].empty() || lines[1].size() > 48) return ArrivalPayloadResult::invalid;
+  // Length + checksum reject missing middle chunks as well as missing tail chunks.
+  const size_t footerStart = text.rfind("\nEND\t");
+  if (footerStart == std::string::npos) return ArrivalPayloadResult::invalid;
+  const auto footer = split(lines[lines.size()-2], '\t');
+  if (footer.size()!=3 || footer[0]!="END" || footer[1].empty() || footer[1].size()>4 || footer[2].size()!=8) return ArrivalPayloadResult::invalid;
+  for(char c:footer[1]) if(c<'0' || c>'9') return ArrivalPayloadResult::invalid;
+  for(char c:footer[2]) if(!((c>='0' && c<='9') || (c>='a' && c<='f') || (c>='A' && c<='F'))) return ArrivalPayloadResult::invalid;
+  const size_t bodySize = footerStart+1;
+  if(std::strtoul(footer[1].c_str(),nullptr,10)!=bodySize) return ArrivalPayloadResult::invalid;
+  uint32_t checksum=2166136261u;
+  for(size_t i=0;i<bodySize;++i) { checksum^=static_cast<uint8_t>(text[i]); checksum*=16777619u; }
+  if(std::strtoul(footer[2].c_str(),nullptr,16)!=checksum) return ArrivalPayloadResult::invalid;
   ArrivalBoard candidate;
-  for (size_t i = 2; i + 1 < lines.size(); ++i) {
+  for (size_t i = 2; i + 2 < lines.size(); ++i) {
     const auto fields = split(lines[i], '\t');
     if (fields.size() == 2 && fields[0] == "P") {
       if (candidate.platformCount == candidate.platforms.size() || fields[1].empty() || fields[1].size() > 16) return ArrivalPayloadResult::invalid;

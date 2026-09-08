@@ -1,39 +1,55 @@
 #pragma once
 #include <stdint.h>
 
-// Transit freshness and request lifetime. Caller serializes access.
+// Generic connected + needs-data policy. Caller serializes access.
 class RefreshFlow {
 public:
   static constexpr uint32_t DATA_MAX_AGE_MS=60000;
-  static constexpr uint32_t REFRESH_TIMEOUT_MS=30000;
+  static constexpr uint32_t RAPID_RETRY_MS=1500;
+  static constexpr uint32_t SLOW_RETRY_MS=5000;
   bool hasTransitData() const { return hasData_; }
   uint32_t lastDataReceivedMs() const { return received_; }
-  bool stale(uint32_t now) const {
-    return !hasData_ || uint32_t(now-received_)>=DATA_MAX_AGE_MS;
+  bool stale(uint32_t now) const { return !hasData_ || uint32_t(now-received_)>=DATA_MAX_AGE_MS; }
+  bool needsData(uint32_t now) const { return failedDemand_ || stale(now); }
+  uint32_t attemptCount() const { return attempts_; }
+  bool paused() const { return paused_; }
+  void setPaused(bool value) {
+    if (paused_ == value) return;
+    paused_ = value;
+    requested_ = false; attempts_ = 0; failed_ = false;
+    // Wake demands new data even if standby lasted less than the freshness threshold.
+    if (!value) failedDemand_ = true;
+    // Never alter hasData_ or received_ here.
   }
-  void onConnected() { blocked_=false; }
+  void onConnected() { requested_=false; attempts_=0; }
   void onDisconnected() {
-    if(requested_) failed_=true;
-    requested_=false;
-    blocked_=false;
+    if(requested_) { failed_=true; failedDemand_=true; }
+    requested_=false; attempts_=0; // No active retry schedule while disconnected.
   }
   bool requested() const { return requested_; }
   bool requestRefresh(uint32_t now,bool connected,bool subscribed) {
-    if(!connected || !subscribed || requested_ || blocked_ || !stale(now)) return false;
-    requested_=true; blocked_=true; failed_=false; started_=now;
+    if(paused_ || !connected || !subscribed || !needsData(now)) return false;
+    const uint32_t interval=attempts_<4 ? RAPID_RETRY_MS : SLOW_RETRY_MS;
+    if(attempts_ && uint32_t(now-lastAttempt_)<interval) return false;
+    requested_=true; lastAttempt_=now;
+    if(attempts_!=UINT32_MAX) ++attempts_;
     return true;
   }
-  void sent(bool success) { if(!success) finish(false,0); }
+  void sent(bool success) {
+    if(!success) { failed_=true; failedDemand_=true; }
+    // A notification enqueue/ACK never changes transit freshness.
+  }
   void finish(bool success,uint32_t now) {
-    requested_=false; failed_=!success;
-    if(success) { hasData_=true; received_=now; blocked_=false; }
-    else blocked_=true;
+    if(success) {
+      hasData_=true; received_=now; requested_=false;
+      failed_=false; failedDemand_=false; attempts_=0;
+    } else {
+      failed_=true; failedDemand_=true;
+      // Preserve the retry schedule; errors cannot cause a tight request loop.
+    }
   }
-  void poll(uint32_t now) {
-    if(requested_ && uint32_t(now-started_)>=REFRESH_TIMEOUT_MS) finish(false,now);
-  }
-  bool takeFailure() { bool value=failed_; failed_=false; return value; }
+  bool takeFailure() { const bool value=failed_; failed_=false; return value; }
 private:
-  bool hasData_=false, requested_=false, blocked_=false, failed_=false;
-  uint32_t received_=0, started_=0;
+  bool hasData_=false, requested_=false, failed_=false, failedDemand_=false, paused_=false;
+  uint32_t received_=0, lastAttempt_=0, attempts_=0;
 };
