@@ -20,14 +20,15 @@ struct BLETestView: View {
     private let countPresets = [1, 10, 100, 1_000, 10_000]
 
     init() {
-        let bluetooth = BluetoothService()
-        _bluetooth = StateObject(wrappedValue: bluetooth)
-        _runner = StateObject(wrappedValue: BLETestRunner(bridge: MessageBridge(bluetooth: bluetooth)))
+        let runtime = BLERuntime.shared
+        _bluetooth = StateObject(wrappedValue: runtime.testBluetooth)
+        _runner = StateObject(wrappedValue: runtime.testRunner)
     }
 
     var body: some View {
         List {
             connectionSection
+            BackgroundReconnectSection(bluetooth: bluetooth, manager: bluetooth.backgroundReconnect, workloadRunning: runner.isRunning)
             controlsSection
             buttonsSection
             statisticsSection
@@ -214,6 +215,28 @@ struct BLETestView: View {
 
     private func percentageString(_ value: Double) -> String {
         String(format: "%.2f%%", value * 100)
+    }
+}
+
+private struct BackgroundReconnectSection: View {
+    @ObservedObject var bluetooth: BluetoothService
+    @ObservedObject var manager: BackgroundReconnectManager
+    let workloadRunning: Bool
+    var body: some View {
+        Section("Background Reconnect Test") {
+            Button("Arm Background Reconnect") { bluetooth.armBackgroundReconnectTest() }
+                .disabled(manager.isArmed || !bluetooth.canSend || workloadRunning)
+            Button("Disarm Reconnect Test") { bluetooth.disconnect() }
+                .disabled(!manager.isArmed)
+            Text(manager.status).font(.caption)
+            LabeledContent("Reconnect callbacks", value: "\(manager.backgroundReconnectCount)")
+            LabeledContent("Last callback backgrounded", value: manager.lastReconnectWasBackgrounded ? "Yes" : "No")
+            if let date = manager.lastBackgroundReconnect {
+                LabeledContent("Last reconnect", value: date.formatted(date: .abbreviated, time: .standard))
+            }
+            Text("Arm while connected. Send ble off in Serial Monitor, background and lock the phone, wait 30 seconds, then press the ESP32 button. A pass requires a new callback with backgrounded = Yes.")
+                .font(.caption)
+        }
     }
 }
 

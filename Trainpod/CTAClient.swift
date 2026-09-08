@@ -8,6 +8,7 @@ struct CTAStation: Codable, Identifiable, Equatable {
     let longitude: Double
     let mapID: String
     let stopIDs: [String]
+    var stopDirections: [String: String]? = nil
 
     var location: CLLocation {
         CLLocation(latitude: latitude, longitude: longitude)
@@ -76,7 +77,9 @@ struct CTAClient {
     private let apiKey = "5dbd9164ce624c06826cbcd6d4eb7d4c"
     private let decoder = JSONDecoder()
 
-    func fetchArrivals(for station: CTAStation, maxArrivals: Int = 20) async throws -> [CTAArrival] {
+    func fetchArrivals(for station: CTAStation, maxArrivals: Int = 20, timeout: TimeInterval = 15) async throws -> [CTAArrival] {
+        FileLogger.shared.log("[API] Arrivals request started")
+        do {
         guard var components = URLComponents(string: "https://lapi.transitchicago.com/api/1.0/ttarrivals.aspx") else {
             throw CTAClientError.invalidURL
         }
@@ -92,13 +95,17 @@ struct CTAClient {
             throw CTAClientError.invalidURL
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        FileLogger.shared.log("[API] Arrivals data received bytes=\(data.count)")
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            FileLogger.shared.log("[API] Invalid response HTTP=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
             throw CTAClientError.invalidResponse
         }
 
         let payload = try decoder.decode(CTAEnvelope.self, from: data)
         if payload.ctatt.errorCode != "0" {
+            FileLogger.shared.log("[API] CTA returned an error")
             throw CTAClientError.ctaError(payload.ctatt.errorName ?? "CTA request failed.")
         }
 
@@ -116,8 +123,12 @@ struct CTAClient {
                 delayed: eta.isDelayed == "1",
                 stationName: eta.stationName,
                 stopDescription: eta.stopDescription,
-                directionID: eta.trainDirection
+                directionID: station.stopDirections?[eta.stopID] ?? eta.trainDirection
             )
+        }
+        } catch {
+            FileLogger.shared.log("[API] Request failed code=\((error as NSError).code) invalidData=\(error is DecodingError)")
+            throw error
         }
     }
 

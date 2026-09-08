@@ -6,9 +6,12 @@
 	<string>Trainpod uses Bluetooth to send CTA train times to your tracker.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Trainpod uses your location once to find the closest CTA train stations.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Trainpod uses your current location when you press the tracker button, including while your phone is locked, to fetch nearby trains.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>
+		<string>location</string>
 	</array>
 </dict>
 </plist>

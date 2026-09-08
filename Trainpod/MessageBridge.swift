@@ -83,6 +83,7 @@ final class MessageBridge: ObservableObject {
         bluetooth.canSend && (wireFormat == .plainText || bluetooth.notificationsReady)
     }
     var pendingCount: Int { pending.count }
+    var isSending: Bool { sending }
 
     /// Returns after all chunks have been submitted, preserving the existing burst behavior.
     /// ACK outcomes arrive through eventHandler. No application retries are performed.
@@ -107,6 +108,7 @@ final class MessageBridge: ObservableObject {
             // The production demo consumes one plain UTF-8 value and has no ACK protocol.
             sequence = nil
             bytes = message
+            FileLogger.shared.log("[BLE] Display response send started bytes=\(message.count)")
         }
         sending = true
         defer { sending = false }
@@ -118,9 +120,16 @@ final class MessageBridge: ObservableObject {
                 try await bluetooth.write(bytes.subdata(in: offset..<end), mode: mode)
             }
             guard session == generation else { throw BridgeError.cancelled }
+            if wireFormat == .plainText {
+                // Receiver uses a 250ms idle boundary. Keep the send coalesced through
+                // that boundary so a retry cannot concatenate two complete boards.
+                try await Task.sleep(for: .milliseconds(300))
+            }
             lastSentMessage = message
             lastError = nil
+            if wireFormat == .plainText { FileLogger.shared.log("[BLE] Display response sent bytes=\(message.count)") }
         } catch {
+            if wireFormat == .plainText { FileLogger.shared.log("[BLE] Display response failed code=\((error as NSError).code)") }
             if session == generation {
                 if let sequence { pending[sequence] = nil }
                 lastError = error.localizedDescription
@@ -204,7 +213,10 @@ final class MessageBridge: ObservableObject {
     }
 
     private func receive(_ data: Data) {
-        if wireFormat == .plainText { messageReceivedHandler?(data); return }
+        if wireFormat == .plainText {
+            messageReceivedHandler?(data)
+            return
+        }
         // ACKs are raw, atomic 10-byte notifications in the existing protocol.
         // They fit the minimum ATT payload; do not concatenate malformed ACK packets.
         if let ack = Acknowledgement(data: data) {

@@ -26,7 +26,8 @@ struct CTAStationRepository {
     }
 
     func loadStations() async throws -> [CTAStation] {
-        if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty {
+        if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty,
+           cachedStations.allSatisfy({ $0.stopDirections != nil }) {
             return cachedStations
         }
 
@@ -74,6 +75,8 @@ struct CTAStationRepository {
     }
 
     private func fetchStations() async throws -> [CTAStation] {
+        FileLogger.shared.log("[API] Station metadata request started")
+        do {
         guard var components = URLComponents(string: "https://data.cityofchicago.org/resource/8pix-ypme.json") else {
             throw CTAStationRepositoryError.invalidURL
         }
@@ -86,8 +89,9 @@ struct CTAStationRepository {
             throw CTAStationRepositoryError.invalidURL
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 6))
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            FileLogger.shared.log("[API] Invalid metadata response HTTP=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
             throw CTAStationRepositoryError.invalidResponse
         }
 
@@ -107,21 +111,28 @@ struct CTAStationRepository {
                 latitude: latitude,
                 longitude: longitude,
                 mapID: mapID,
-                stopIDs: stops.map(\.stopID).sorted()
+                stopIDs: stops.map(\.stopID).sorted(),
+                stopDirections: Dictionary(stops.map { ($0.stopID, $0.directionID) }, uniquingKeysWith: { first, _ in first })
             )
         }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        } catch {
+            FileLogger.shared.log("[API] Metadata request failed code=\((error as NSError).code) invalidData=\(error is DecodingError)")
+            throw error
+        }
     }
 }
 
 private struct CTALStop: Decodable {
     let stopID: String
+    let directionID: String
     let stationName: String
     let mapID: String
     let location: CTALStopLocation
 
     enum CodingKeys: String, CodingKey {
         case stopID = "stop_id"
+        case directionID = "direction_id"
         case stationName = "station_name"
         case mapID = "map_id"
         case location

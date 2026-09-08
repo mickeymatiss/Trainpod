@@ -4,13 +4,17 @@ struct NearbyStationsView: View {
     @StateObject private var viewModel = NearbyStationsViewModel()
     @StateObject private var bluetooth: BluetoothService
     @StateObject private var bridge: MessageBridge
-    @State private var autoSendDummyOnConnect = false
+    @StateObject private var refreshHandler: RefreshRequestHandler
+    @StateObject private var liveProvider: LiveTransitProvider
     @State private var isSendingFreshLiveData = false
+    @State private var showingLogs = false
 
     init() {
-        let bluetooth = BluetoothService()
-        _bluetooth = StateObject(wrappedValue: bluetooth)
-        _bridge = StateObject(wrappedValue: MessageBridge(bluetooth: bluetooth, wireFormat: .plainText))
+        let runtime = BLERuntime.shared
+        _liveProvider = StateObject(wrappedValue: runtime.provider)
+        _bluetooth = StateObject(wrappedValue: runtime.bluetooth)
+        _bridge = StateObject(wrappedValue: runtime.bridge)
+        _refreshHandler = StateObject(wrappedValue: runtime.refreshHandler)
     }
 
     var body: some View {
@@ -34,11 +38,7 @@ struct NearbyStationsView: View {
         }
         .listStyle(.insetGrouped)
         .navigationTitle("Nearby Trains")
-        .onAppear {
-            bluetooth.readyHandler = {
-                if autoSendDummyOnConnect { sendTransitPayload(TransitMessage.dummyPayload) }
-            }
-        }
+        .sheet(isPresented: $showingLogs) { LogShareSheet() }
         .onDisappear {
             viewModel.stopRefreshing()
         }
@@ -55,7 +55,6 @@ struct NearbyStationsView: View {
             }
 
             Button {
-                autoSendDummyOnConnect = true
                 bluetooth.scanAndConnect()
             } label: {
                 Label("Connect CTA Tracker", systemImage: "antenna.radiowaves.left.and.right")
@@ -75,6 +74,28 @@ struct NearbyStationsView: View {
                 Label("Send Test Data", systemImage: "paperplane")
             }
             .disabled(!bluetooth.canSend)
+
+            Text(refreshHandler.status).font(.caption)
+            Button("Share Logs", systemImage: "square.and.arrow.up") {
+                Task {
+                    await FileLogger.shared.flush()
+                    showingLogs = true
+                }
+            }
+            Button("Clear Logs", role: .destructive) { FileLogger.shared.clearLogs() }
+            DisclosureGroup("Connection Lifecycle Log") {
+                ForEach(Array(bluetooth.lifecycleDiagnostics.enumerated()), id: \.offset) { _, entry in
+                    Text(entry).font(.caption2.monospaced()).textSelection(.enabled)
+                }
+            }
+            Button("Enable Background Location") { liveProvider.enableBackgroundLocation() }
+            Text("For locked-phone refreshes, allow Always location access. The device requests data automatically; recent transit results are reused for 30 seconds.")
+                .font(.caption).foregroundStyle(.secondary)
+            LabeledContent("Device refresh requests", value: "\(refreshHandler.requestCount)")
+            LabeledContent("Last request backgrounded", value: refreshHandler.lastRequestWasBackgrounded ? "Yes" : "No")
+            if let date = refreshHandler.lastRequest {
+                LabeledContent("Last device request", value: date.formatted(date: .abbreviated, time: .standard))
+            }
 
             if isSendingFreshLiveData {
                 HStack(spacing: 8) {
@@ -161,7 +182,7 @@ struct NearbyStationsView: View {
                 } label: {
                     Label("Send Live Data", systemImage: "paperplane.fill")
                 }
-                .disabled(!bluetooth.canSend || livePayloadSource(from: stationArrivals) == nil)
+                .disabled(!bluetooth.canSend || LiveTransitFormatter.livePayloadSource(from: stationArrivals) == nil)
             } footer: {
                 Text("Updated \(updatedAt.formatted(date: .omitted, time: .shortened)). Arrivals refresh every minute while this page is open.")
             }
@@ -179,111 +200,34 @@ struct NearbyStationsView: View {
     }
 
     private func sendFreshLiveDataIfAvailable() async {
-        guard bluetooth.canSend, !isSendingFreshLiveData else {
+        guard bluetooth.canSend, !bridge.isSending, !isSendingFreshLiveData else {
             return
         }
 
         isSendingFreshLiveData = true
         defer { isSendingFreshLiveData = false }
 
-        guard let stationArrivals = await viewModel.freshArrivalsForBLESend(), bluetooth.canSend else {
+        let stationArrivals = await viewModel.freshArrivalsForBLESend()
+        guard bluetooth.canSend, !bridge.isSending else {
             return
         }
 
-        sendLiveData(stationArrivals)
+        sendLiveData(stationArrivals ?? [])
     }
 
     private func sendLiveData(_ stationArrivals: [StationArrivals]) {
-        guard let source = livePayloadSource(from: stationArrivals) else {
-            return
-        }
-
-        let payload = [
-            source.station.station.name,
-            cleanDirectionName(source.directions[0].name),
-            lineGroups(from: source.directions[0].trains).joined(separator: ";"),
-            cleanDirectionName(source.directions[1].name),
-            lineGroups(from: source.directions[1].trains).joined(separator: ";")
-        ].joined(separator: "|")
-
-        sendTransitPayload(payload)
+        let data = (try? LiveTransitFormatter.payload(from: stationArrivals)) ?? TransitMessage.unavailablePayload
+        sendTransitPayload(String(decoding: data, as: UTF8.self))
     }
 
     private func sendTransitPayload(_ payload: String) {
         Task {
+            guard !bridge.isSending else {
+                FileLogger.shared.log("[REFRESH] BLE payload already sending; foreground send coalesced")
+                return
+            }
             do { try await bridge.send(TransitMessage.encode(payload), mode: bluetooth.preferredWriteMode) }
             catch { /* MessageBridge publishes the send error for this view. */ }
-        }
-    }
-
-    private func cleanDirectionName(_ name: String) -> String {
-        name.replacingOccurrences(of: "Toward ", with: "")
-    }
-
-    private func livePayloadSource(from stationArrivals: [StationArrivals]) -> (station: StationArrivals, directions: [DirectionArrivals])? {
-        guard let station = stationArrivals.first(where: { $0.directions.count >= 2 }) else {
-            return nil
-        }
-
-        return (station, Array(station.directions.prefix(2)))
-    }
-
-    private func lineGroups(from trains: [CTAArrival]) -> [String] {
-        let routeOrder = orderedRoutes(from: trains)
-        let trainsByRoute = Dictionary(grouping: trains.prefix(3)) { train in
-            train.route
-        }
-
-        return routeOrder.compactMap { route in
-            guard let routeTrains = trainsByRoute[route] else {
-                return nil
-            }
-
-            let etas = routeTrains
-                .map(minuteETA)
-                .map(String.init)
-                .joined(separator: ",")
-
-            return "\(routeName(for: route)):\(routeColorHex(for: route)):\(etas)"
-        }
-    }
-
-    private func orderedRoutes(from trains: [CTAArrival]) -> [String] {
-        var routes: [String] = []
-        for train in trains.prefix(3) where !routes.contains(train.route) {
-            routes.append(train.route)
-        }
-        return routes
-    }
-
-    private func minuteETA(from train: CTAArrival) -> Int {
-        max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up)))
-    }
-
-    private func routeName(for route: String) -> String {
-        switch route.lowercased() {
-        case "g": return "Green"
-        case "brn": return "Brown"
-        case "org": return "Orange"
-        case "p": return "Purple"
-        case "pexp": return "Purple Express"
-        case "pnk", "pink": return "Pink"
-        case "y": return "Yellow"
-        default: return route.capitalized
-        }
-    }
-
-    private func routeColorHex(for route: String) -> String {
-        switch route.lowercased() {
-        case "red": return "C60C30"
-        case "blue": return "00A1DE"
-        case "brn": return "62361B"
-        case "g": return "009B3A"
-        case "org": return "F9461C"
-        case "p", "pexp": return "522398"
-        case "pnk", "pink": return "E27EA6"
-        case "y": return "F9E300"
-        default: return "FFFFFF"
         }
     }
 
@@ -316,6 +260,13 @@ struct NearbyStationsView: View {
             }
         }
     }
+}
+
+private struct LogShareSheet: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [FileLogger.shared.fileURL], applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 private struct DirectionArrivalsView: View {
