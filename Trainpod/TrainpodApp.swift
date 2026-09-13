@@ -9,8 +9,8 @@ struct TrainpodApp: App {
             ContentView()
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { FileLogger.shared.log("[APP] App became active") }
-            if phase == .background { FileLogger.shared.log("[APP] App entered background") }
+            if phase == .active { FileLogger.shared.log("[APP] App became active"); PhoneDiagnosticLog.shared.record("APP_FOREGROUND") }
+            if phase == .background { FileLogger.shared.log("[APP] App entered background"); PhoneDiagnosticLog.shared.record("APP_BACKGROUND") }
         }
     }
 }

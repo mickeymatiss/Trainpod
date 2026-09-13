@@ -1,9 +1,9 @@
-#include "../TransitTextBuffer.h"
+#include "../src/platform/transport/IdleTextBuffer.h"
 #include <cassert>
 #include <string>
 #include <cstdio>
 int main() {
-  TransitTextBuffer b;
+  IdleTextBuffer b;
   std::string payload="Morgan|West|Pink:E27EA6:1,3|Loop|Pink:E27EA6:8";
   uint64_t now=100;
   for(size_t i=0;i<payload.size();i+=7) {

@@ -1,4 +1,4 @@
-#include "../ArrivalPayload.h"
+#include "../src/products/transit/data/ArrivalPayload.h"
 #include <cassert>
 #include <iostream>
 

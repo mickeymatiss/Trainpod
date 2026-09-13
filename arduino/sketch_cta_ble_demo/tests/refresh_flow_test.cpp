@@ -1,4 +1,4 @@
-#include "../RefreshFlow.h"
+#include "../src/products/transit/ble/RefreshFlow.h"
 #include <cassert>
 #include <cstdio>
 int main() {
