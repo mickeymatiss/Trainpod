@@ -6,6 +6,7 @@ struct LiveTransitFormatter {
     static let maximumStations = 2
     static let platformsPerStation = 2
     static let arrivalsPerPlatform = 9
+    static let arrivalsWithoutTimeCutoff = 3
     static let arrivalWindowSeconds: TimeInterval = 30 * 60
 
     struct PlatformPage {
@@ -33,9 +34,10 @@ struct LiveTransitFormatter {
     static func distanceLabel(_ meters: Double?) -> (value: String, unit: String) {
         guard let meters, meters.isFinite, meters >= 0, meters / 1609.344 < 9999.95 else { return ("", "mi") }
         let feet = meters / 0.3048
-        if meters <= 609.6 {
-            // Choose the unit before rounding: 2,000 feet or less stays in feet.
-            return (String(min(2000, Int((feet / 100).rounded()) * 100)), "ft")
+        if meters < 304.8 {
+            // Choose units from the actual distance before rounding to hundreds.
+            // At 1,000 feet or more, show miles instead.
+            return (String(min(1000, Int((feet / 100).rounded()) * 100)), "ft")
         }
         return (distanceMiles(meters), "mi")
     }
@@ -54,10 +56,17 @@ struct LiveTransitFormatter {
         guard !pages.isEmpty else { throw LiveTransitError.noDirections }
         let now = Date()
         var rows = pages.map { page in
-            page.trains.filter {
-                let remaining = $0.arrivalTime.timeIntervalSince(now)
-                return remaining >= 0 && remaining <= arrivalWindowSeconds
-            }.sorted { $0.arrivalTime < $1.arrivalTime }.prefix(arrivalsPerPlatform).map { train in
+            // Rank upcoming trains before applying the window: the first three
+            // remain useful even when service is more than 30 minutes away.
+            page.trains.filter { $0.arrivalTime >= now }
+                .sorted { $0.arrivalTime < $1.arrivalTime }
+                .enumerated()
+                .filter {
+                    $0.offset < arrivalsWithoutTimeCutoff ||
+                        $0.element.arrivalTime.timeIntervalSince(now) <= arrivalWindowSeconds
+                }
+                .prefix(arrivalsPerPlatform).map { entry in
+                let train = entry.element
                 let eta = max(0, min(9999, Int((train.arrivalTime.timeIntervalSince(now) / 60).rounded(.up))))
                 return ["A", field(page.isMTA ? train.route.uppercased() : routeName(for: train.route), limit: 20), page.isMTA ? MTARouteStyle.hex(train.route) : routeColorHex(for: train.route),
                         field(train.destination, limit: 48), String(eta)].joined(separator: "\t")

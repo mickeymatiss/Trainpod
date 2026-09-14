@@ -1,25 +1,52 @@
 #pragma once
+#include <array>
+#include <stddef.h>
 #include <stdint.h>
 
+// Station/platform and arrival-page navigation; never started by data refresh.
+// Header, three arrival rows, distance. Timings are snapshotted per transition.
 class PlatformDip {
 public:
-  static constexpr uint32_t StepMs=35;
+  struct Settings { bool enabled=true; int outMs=200,inMs=200,stagger=75,gap=75; } settings;
+  struct Group { uint8_t opacity=255,from=255; bool incoming=false; };
+  std::array<Group,5> groups{};
   bool active=false;
-  uint8_t step=0;
-  void begin(uint32_t now) { active=true; step=0; lastFrame=now; }
+  void begin(uint32_t now) {
+    for(auto& g:groups) g=Group{};
+    active=true;started=now;lastFrame=now-25;running=settings;
+  }
   void retarget(uint32_t now) {
-    // Already recovering: return to the next minimum, never queue another trip.
-    if (step>=3) { step=1; lastFrame=now; }
+    for(auto& g:groups) { g.from=g.opacity; g.incoming=false; }
+    active=true;started=now;lastFrame=now-25;running=settings;
   }
   bool tick(uint32_t now) {
-    if (!active || uint32_t(now-lastFrame)<StepMs) return false;
-    lastFrame=now; ++step;
-    if (step==5) active=false;
+    const uint32_t duration=running.outMs+running.gap+running.inMs+4*running.stagger;
+    if(!active || (settings.enabled && uint32_t(now-lastFrame)<25 && uint32_t(now-started)<duration)) return false;
+    lastFrame=now;
+    bool complete=true;
+    for(size_t i=0;i<groups.size();++i) {
+      auto& g=groups[i];
+      const int elapsed=int(uint32_t(now-started))-int(i)*running.stagger;
+      const int inStart=running.outMs+running.gap;
+      if(!settings.enabled) { g.incoming=true;g.opacity=255;continue; }
+      if(elapsed<0) { g.opacity=g.from;g.incoming=false; }
+      else if(elapsed<running.outMs) {
+        const uint32_t remaining=running.outMs-elapsed;
+        g.opacity=uint32_t(g.from)*remaining*remaining/(running.outMs*running.outMs);
+        g.incoming=false;
+      } else if(elapsed<inStart) { g.opacity=0;g.incoming=false; }
+      else {
+        g.incoming=true;
+        const int t=elapsed-inStart;
+        g.opacity=t>=running.inMs ? 255 : 255-(255u*(running.inMs-t)*(running.inMs-t))/(running.inMs*running.inMs);
+      }
+      if(elapsed<inStart+running.inMs) complete=false;
+    }
+    active=!complete;
     return true;
   }
-  bool swaps() const { return step==3; }
-  uint8_t opacity() const { return step==1 || step==4 ? 179 : step==2 || step==3 ? 89 : 255; }
-  void cancel() { active=false;step=0; }
+  void cancel() { active=false; }
 private:
-  uint32_t lastFrame=0;
+  Settings running;
+  uint32_t started=0,lastFrame=0;
 };

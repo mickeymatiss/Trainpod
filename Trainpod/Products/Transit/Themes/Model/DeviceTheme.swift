@@ -46,7 +46,7 @@ struct DeviceTheme: Identifiable, Equatable, Codable {
                    (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0)
                }
            }) { return saved.asCustom() }
-        return presets[2].asCustom()
+        return defaultTheme.asCustom()
     }
     static func hex(_ color: Color) -> String? {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
@@ -56,7 +56,13 @@ struct DeviceTheme: Identifiable, Equatable, Codable {
         return String(format: "#%02X%02X%02X", rgb[0], rgb[1], rgb[2])
     }
 
+    // Exact RGB888 values shared with the firmware factory palette.
+    static let defaultTheme = DeviceTheme(id: "default", name: "default",
+        background: "#FFECEA", primaryText: "#19005D", detail: "#F70000",
+        secondaryText: "#000123", arrivalBadge: "#000000", arrivalBadgeText: "#FFB485")
+
     static let presets: [DeviceTheme] = [
+        defaultTheme,
         DeviceTheme(id: "light_pink", name: "Light Pink",
             background: "#F3C9D8", primaryText: "#641E39", detail: "#FFE7F0", secondaryText: "#9A4968", arrivalBadge: "#7A294B", arrivalBadgeText: "#FFE7F0"),
         DeviceTheme(id: "lilac", name: "Lilac",

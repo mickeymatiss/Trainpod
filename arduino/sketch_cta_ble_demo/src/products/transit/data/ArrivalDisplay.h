@@ -32,6 +32,7 @@ enum class BatteryState { unknown, healthy, caution, low };
 class ArrivalScreenState {
 public:
   static constexpr uint32_t ArrivalPageIntervalMs = 6000;
+  static constexpr uint32_t FirstArrivalPageIntervalMs = 8000;
   void setBoard(const ArrivalBoard& board, uint32_t now) {
     const std::string oldDirection = data.platforms[platform].direction;
     const std::string oldStation = data.platforms[platform].stationName;
@@ -69,12 +70,20 @@ public:
     page = 0; pageStarted = now;
   }
   size_t pageCount() const { return std::max(size_t(1), (std::min(size_t(9), current().arrivalCount) + 2) / 3); }
+  uint32_t pageIntervalMs() const { return page==0 ? FirstArrivalPageIntervalMs : ArrivalPageIntervalMs; }
   bool tick(uint32_t now) {
     bool changed = false;
-    if (pageCount() > 1 && uint32_t(now - pageStarted) >= ArrivalPageIntervalMs) {
-      page = (page + uint32_t(now - pageStarted) / ArrivalPageIntervalMs) % pageCount();
-      pageStarted += (uint32_t(now - pageStarted) / ArrivalPageIntervalMs) * ArrivalPageIntervalMs;
-      changed = true;
+    const size_t count=pageCount();
+    if (count > 1 && uint32_t(now - pageStarted) >= pageIntervalMs()) {
+      // Skip complete cycles after a delayed tick, then advance at most one
+      // cycle using each page's own dwell time. Page 1 gets 8 seconds every lap.
+      const uint32_t cycle=FirstArrivalPageIntervalMs+uint32_t(count-1)*ArrivalPageIntervalMs;
+      pageStarted += (uint32_t(now-pageStarted)/cycle)*cycle;
+      while(uint32_t(now-pageStarted)>=pageIntervalMs()) {
+        pageStarted += pageIntervalMs();
+        page=(page+1)%count;
+        changed=true;
+      }
     }
     if (uint32_t(now - clockAdvanced) >= 15000) {
       clockFrame = (clockFrame + uint32_t(now - clockAdvanced) / 15000) % 4;

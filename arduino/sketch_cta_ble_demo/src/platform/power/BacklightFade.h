@@ -5,6 +5,7 @@
 class BacklightFade {
 public:
   explicit BacklightFade(uint8_t pin) : pin_(pin) {}
+  bool isDark() const { return !fading_ && written_==0; }
   void begin() {
     pinMode(pin_, OUTPUT);
     analogWrite(pin_, 0);

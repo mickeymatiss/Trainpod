@@ -1,3 +1,4 @@
+#include "SerialLog.h"
 #include "DiagnosticExport.h"
 #include "../ble/BleSession.h"
 #include "../metrics/MetricsStore.h"
@@ -169,7 +170,7 @@ bool DiagnosticExport::send(BleSession& session, uint8_t type, const uint8_t* da
   const bool sent = session.sendDiagnosticNotification(packet,count+8);
   if (!sent && !notificationFailureReported_) {
     notificationFailureReported_ = true;
-    Serial.printf("[DIAG] Notification enqueue failed: kind=%u offset=%lu connected=%u; retrying\n",
+    DebugLog.printf("[DIAG] Notification enqueue failed: kind=%u offset=%lu connected=%u; retrying\n",
       type,(unsigned long)offset_,session.isConnected());
   }
   return sent;
@@ -185,7 +186,7 @@ void DiagnosticExport::fail(const char* reason, BleSession* session) {
     DiagnosticStore::shared().event(EventCode::DIAGNOSTIC_EXPORT_FAILED,LogLevel::Warn,code);
     errorCode_ = uint8_t(code);
   }
-  Serial.printf("[DIAG] FAILED: %s id=%08lx phase=%u offset=%lu bytes=%u freeHeap=%lu largestBlock=%lu\n",
+  WarnLog.printf("[DIAG] FAILED: %s id=%08lx phase=%u offset=%lu bytes=%u freeHeap=%lu largestBlock=%lu\n",
     reason,(unsigned long)id_,unsigned(phase_),(unsigned long)offset_,payload_.length(),
     (unsigned long)ESP.getFreeHeap(),(unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
   requested_ = false;
@@ -198,7 +199,7 @@ void DiagnosticExport::fail(const char* reason, BleSession* session) {
 void DiagnosticExport::update(BleSession& session) {
   auto& store = DiagnosticStore::shared();
   if (duplicateRequest_.exchange(false))
-    Serial.println("[DIAG] DIAG_EXPORT ignored: an export is already active");
+    DebugLog.println("[DIAG] DIAG_EXPORT ignored: an export is already active");
   if (disconnected_.exchange(false) || cancel_.exchange(false)) {
     if (phase_ == Phase::Confirm || phase_ == Phase::Error) clear(); else fail("disconnect_or_cancel");
     return;
@@ -210,13 +211,13 @@ void DiagnosticExport::update(BleSession& session) {
     if (!id_) id_ = 1;
     started_ = now; offset_ = 0; lastSend_ = now-10;
     notificationFailureReported_ = false;
-    Serial.printf("[DIAG] DIAG_EXPORT received: id=%08lx freeHeap=%lu largestBlock=%lu\n",
+    DebugLog.printf("[DIAG] DIAG_EXPORT received: id=%08lx freeHeap=%lu largestBlock=%lu\n",
       (unsigned long)id_,(unsigned long)ESP.getFreeHeap(),
       (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
     if (!store.flush()) { fail("counter_persistence",&session); return; }
     if (!buildPayload()) { fail("snapshot_allocation",&session); return; }
     checksum_ = BLETestReceiver::crc32(reinterpret_cast<const uint8_t*>(payload_.c_str()),payload_.length());
-    Serial.printf("[DIAG] Snapshot ready: %u bytes, notification capacity=%u\n",payload_.length(),unsigned(session.notificationCapacity()));
+    DebugLog.printf("[DIAG] Snapshot ready: %u bytes, notification capacity=%u\n",payload_.length(),unsigned(session.notificationCapacity()));
     phase_ = Phase::Begin;
   }
   const uint32_t ack = ack_.exchange(0);
@@ -226,7 +227,7 @@ void DiagnosticExport::update(BleSession& session) {
     store.purgeThrough(snapshot_.cutoff);
     store.event(EventCode::DIAGNOSTIC_EXPORT_COMPLETE);
     store.flush(); MetricsStore::shared().flush();
-    Serial.printf("[DIAG] Receipt accepted: id=%08lx; exported logs cleared\n",(unsigned long)id_);
+    DebugLog.printf("[DIAG] Receipt accepted: id=%08lx; exported logs cleared\n",(unsigned long)id_);
     lastAcknowledged_ = id_; confirmed_ = now; phase_ = Phase::Confirm;
   } else if (ack && ack == lastAcknowledged_ && !busy_.load()) {
     id_ = ack; send(session,4,nullptr,0); // Idempotent ACK retry, never purges twice.
@@ -249,7 +250,7 @@ void DiagnosticExport::update(BleSession& session) {
     case Phase::Begin:
       data[0] = 1; data[1] = 0; put32(data+2,payload_.length()); put32(data+6,checksum_);
       if (send(session,1,data,10)) {
-        Serial.println("[DIAG] BEGIN notification queued; streaming snapshot");
+        DebugLog.println("[DIAG] BEGIN notification queued; streaming snapshot");
         phase_ = Phase::Data;
       }
       break;
@@ -263,7 +264,7 @@ void DiagnosticExport::update(BleSession& session) {
     }
     case Phase::End:
       put32(data,checksum_); if (send(session,3,data,4)) {
-        Serial.println("[DIAG] END notification queued; waiting for saved receipt");
+        DebugLog.println("[DIAG] END notification queued; waiting for saved receipt");
         phase_ = Phase::AwaitAck;
       }
       break;

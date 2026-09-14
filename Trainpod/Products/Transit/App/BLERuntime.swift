@@ -15,6 +15,10 @@ final class BLERuntime {
     let testRunner: BLETestRunner
 
     private init() {
+        // Test locations are opt-in for this app session. Reset before BLE can
+        // request transit data, including launches for background restoration.
+        UserDefaults.standard.set(MTALocationMode.current.rawValue,
+                                  forKey: MTALocationMode.preferenceKey)
         bluetooth = BluetoothService(configuration: TransitBLEConfiguration.current, role: "transit", autoConnect: true)
         bridge = MessageBridge(bluetooth: bluetooth, wireFormat: .plainText)
         uiColor = DeviceUIColor(bluetooth: bluetooth, bridge: bridge)

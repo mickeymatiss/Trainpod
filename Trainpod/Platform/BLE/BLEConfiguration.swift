@@ -13,4 +13,5 @@ struct BLEConfiguration {
     let controlMessages: Set<Data>
     let ignoredControlMessage: String
     var supportsDiagnosticsTimeSync: Bool = false
+    var deviceIdentityUUID: CBUUID? = nil
 }

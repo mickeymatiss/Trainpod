@@ -88,6 +88,29 @@ void DiagnosticStore::retainTransaction(uint64_t id) {
   portEXIT_CRITICAL(&mutex_);
 }
 void DiagnosticStore::event(EventCode code, LogLevel level, int32_t value1, int32_t value2, uint64_t transactionId) {
+  // Keep detailed traces, but classify routine lifecycle/transport work as debug.
+  if(level==LogLevel::Info) {
+    switch(code) {
+      case EventCode::BOOT_START: case EventCode::BOOT_READY:
+      case EventCode::BLE_INIT_START: case EventCode::BLE_INIT_COMPLETE:
+      case EventCode::BLE_ADVERTISING_START: case EventCode::BLE_ADVERTISING_RESTART:
+      case EventCode::BLE_ADVERTISING_STOP: case EventCode::BLE_DISCONNECTED:
+      case EventCode::BLE_SESSION_STOPPED: case EventCode::DATA_REQUEST_SENT:
+      case EventCode::DATA_RESPONSE_STARTED: case EventCode::DATA_RESPONSE_COMPLETE:
+      case EventCode::FETCH_REQUESTED: case EventCode::FETCH_SUCCESS:
+      case EventCode::PAYLOAD_RX_START: case EventCode::PAYLOAD_RX_COMPLETE:
+      case EventCode::DISPLAY_UPDATE_START: case EventCode::DISPLAY_UPDATE_COMPLETE:
+      case EventCode::STARTUP_COMPLETE: case EventCode::TIME_SYNC_RECEIVED:
+      case EventCode::TIME_SYNC_UPDATED: case EventCode::POWER_ACTIVE:
+      case EventCode::POWER_DIMMED: case EventCode::POWER_STANDBY:
+      case EventCode::BUTTON_PRESSED: case EventCode::RESPONSE_RX_STARTED:
+      case EventCode::RESPONSE_RX_CHUNK: case EventCode::RESPONSE_RX_COMPLETE:
+      case EventCode::PAYLOAD_PARSE_STARTED: case EventCode::PAYLOAD_PARSE_SUCCESS:
+      case EventCode::DATA_APPLIED_ACK_QUEUED: case EventCode::DISPLAY_UPDATED:
+        level=LogLevel::Debug; break;
+      default: break;
+    }
+  }
   DiagnosticEntry entry;
   entry.transactionId = transactionId;
   entry.eventCode = code; entry.level = level; entry.value1 = value1; entry.value2 = value2;

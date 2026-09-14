@@ -1,3 +1,4 @@
+#include "../../../platform/diagnostics/SerialLog.h"
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <esp_timer.h>
@@ -13,6 +14,7 @@
 #include "../../../platform/metrics/MetricsStore.h"
 #include "../../../platform/diagnostics/DiagnosticStore.h"
 static RefreshFlow refreshFlow;
+extern bool handleUiSerialCommand(const char* command);
 static void (*uiColorChanged)() = nullptr;
 // Atomic ATT command (19 bytes): UC:1234ABCD:#RRGGBB.
 // ACK: UA:1234ABCD:#RRGGBB; errors E1 invalid, E2 storage, E3 busy.
@@ -258,20 +260,20 @@ static BleSession session(DEVICE_NAME,SERVICE_UUID,CHARACTERISTIC_UUID,integrati
 void printStats(const BLETestReceiver::Stats& s,uint64_t dropped) {
   // Freeze the measured receive interval; never include the summary's idle wait.
   double seconds=s.active && s.lastMessageUs>=s.startUs ? (s.lastMessageUs-s.startUs)/1e6 : 0;
-  Serial.println("\n---------- BLE TEST SUMMARY ----------");
-  Serial.printf("Messages received: %llu\nValid: %llu\nInvalid: %llu\nChecksum failures: %llu\n",
+  InfoLog.println("\n---------- BLE TEST SUMMARY ----------");
+  InfoLog.printf("Messages received: %llu\nValid: %llu\nInvalid: %llu\nChecksum failures: %llu\n",
     s.messages,s.valid,s.invalid,s.checksumFailures);
-  Serial.printf("Missing sequence (gaps observed): %llu\nDuplicates: %llu\nOut of order: %llu\nToo old to classify duplicate: %llu\n",
+  InfoLog.printf("Missing sequence (gaps observed): %llu\nDuplicates: %llu\nOut of order: %llu\nToo old to classify duplicate: %llu\n",
     s.missing,s.duplicates,s.outOfOrder,s.stale);
-  Serial.printf("Payload bytes: %llu\nValid payload bytes: %llu\nBLE chunks: %llu\nWire bytes: %llu\n",
+  InfoLog.printf("Payload bytes: %llu\nValid payload bytes: %llu\nBLE chunks: %llu\nWire bytes: %llu\n",
     s.bytes,s.validBytes,s.chunks,s.wireBytes);
-  Serial.printf("Duration: %.6f s\nRate: %.2f valid msg/s\nThroughput: %.2f KB/s\n",
+  InfoLog.printf("Duration: %.6f s\nRate: %.2f valid msg/s\nThroughput: %.2f KB/s\n",
     seconds,seconds>0?s.valid/seconds:0,seconds>0?s.validBytes/1000.0/seconds:0);
-  Serial.printf("Minimum: %lu B\nLargest: %lu B\nChunks/message: %.2f\n",
+  InfoLog.printf("Minimum: %lu B\nLargest: %lu B\nChunks/message: %.2f\n",
     (unsigned long)s.minimum,(unsigned long)s.maximum,s.messages?double(s.messageChunks)/s.messages:0);
-  Serial.printf("Assembly avg: %.3f ms\nAssembly min: %.3f ms\nAssembly max: %.3f ms\n",
+  InfoLog.printf("Assembly avg: %.3f ms\nAssembly min: %.3f ms\nAssembly max: %.3f ms\n",
     s.messages?s.assemblySum/1000.0/s.messages:0,s.assemblyMin/1000.0,s.assemblyMax/1000.0);
-  Serial.printf("ACK enqueue failures: %llu\nDropped log lines: %llu\n--------------------------------------\n",s.ackFailures,dropped);
+  InfoLog.printf("ACK enqueue failures: %llu\nDropped log lines: %llu\n--------------------------------------\n",s.ackFailures,dropped);
 }
 void setupBleIntegration(void (*onRefreshStarted)(), void (*onUiColorChanged)()) {
   uiColorChanged=onUiColorChanged;
@@ -280,23 +282,23 @@ void setupBleIntegration(void (*onRefreshStarted)(), void (*onUiColorChanged)())
   colorRequests=xQueueCreate(4,sizeof(UiColorRequest));
   reports=xQueueCreate(32,sizeof(BLETestReceiver::Result));
   rawWrites=xQueueCreate(16,sizeof(RawWrite));
-  if(!receiverMutex || !reports || !rawWrites || !colorRequests) { Serial.println("Test receiver allocation failed"); while(true) delay(1000); }
+  if(!receiverMutex || !reports || !rawWrites || !colorRequests) { WarnLog.println("Test receiver allocation failed"); while(true) delay(1000); }
   bleSession=&session;
   transactionBoot=MetricsStore::shared().get().bootCount;
-  Serial.println("BLE lifecycle ready: on-demand CTA Tracker sessions | 115200 baud");
+  DebugLog.println("BLE lifecycle ready: on-demand CTA Tracker sessions | 115200 baud");
 }
 
 void printRawWrite(const RawWrite& raw) {
-  Serial.printf("BLE WRITE | %u B | HEX ",raw.size);
-  for(uint16_t i=0;i<raw.captured;++i) Serial.printf("%02X",raw.data[i]);
-  if(raw.captured<raw.size) Serial.printf("...(+%u B)",raw.size-raw.captured);
-  Serial.print(" | ASCII ");
+  DebugLog.printf("BLE WRITE | %u B | HEX ",raw.size);
+  for(uint16_t i=0;i<raw.captured;++i) DebugLog.printf("%02X",raw.data[i]);
+  if(raw.captured<raw.size) DebugLog.printf("...(+%u B)",raw.size-raw.captured);
+  DebugLog.print(" | ASCII ");
   for(uint16_t i=0;i<raw.captured;++i) {
     const uint8_t c=raw.data[i];
-    Serial.write(c>=32 && c<=126 ? c : '.');
+    DebugLog.write(c>=32 && c<=126 ? c : '.');
   }
-  if(raw.captured<raw.size) Serial.print("...");
-  Serial.println();
+  if(raw.captured<raw.size) DebugLog.print("...");
+  DebugLog.println();
 }
 
 // The only NEED_DATA notification. Called with receiverMutex held.
@@ -324,17 +326,17 @@ static bool requestRefresh(uint32_t now,bool& sent) {
 
 static void printMetrics() {
   const auto m=MetricsStore::shared().get();
-  Serial.println("[METRICS] Current aggregate (RAM snapshot)");
-  Serial.printf("version=%lu bootCount=%lu buttonPressCount=%lu\n",
+  InfoLog.println("[METRICS] Current aggregate (RAM snapshot)");
+  InfoLog.printf("version=%lu bootCount=%lu buttonPressCount=%lu\n",
     (unsigned long)m.version,(unsigned long)m.bootCount,(unsigned long)m.buttonPressCount);
-  Serial.printf("bootDataSuccessCount=%lu bootDataFailureCount=%lu startupPending=%lu\n",
+  InfoLog.printf("bootDataSuccessCount=%lu bootDataFailureCount=%lu startupPending=%lu\n",
     (unsigned long)m.bootDataSuccessCount,(unsigned long)m.bootDataFailureCount,(unsigned long)m.startupPending);
-  Serial.printf("latencyUnder2s=%lu latency2To4s=%lu latency4To8s=%lu latency8To15s=%lu latencyOver15s=%lu\n",
+  InfoLog.printf("latencyUnder2s=%lu latency2To4s=%lu latency4To8s=%lu latency8To15s=%lu latencyOver15s=%lu\n",
     (unsigned long)m.latencyUnder2s,(unsigned long)m.latency2To4s,(unsigned long)m.latency4To8s,
     (unsigned long)m.latency8To15s,(unsigned long)m.latencyOver15s);
-  Serial.printf("bleConnectAttempts=%lu bleConnectSuccesses=%lu bleConnectFailures=%lu\n",
+  InfoLog.printf("bleConnectAttempts=%lu bleConnectSuccesses=%lu bleConnectFailures=%lu\n",
     (unsigned long)m.bleConnectAttempts,(unsigned long)m.bleConnectSuccesses,(unsigned long)m.bleConnectFailures);
-  Serial.printf("fetchAttempts=%lu fetchSuccesses=%lu fetchFailures=%lu unexpectedResetCount=%lu\n",
+  InfoLog.printf("fetchAttempts=%lu fetchSuccesses=%lu fetchFailures=%lu unexpectedResetCount=%lu\n",
     (unsigned long)m.fetchAttempts,(unsigned long)m.fetchSuccesses,(unsigned long)m.fetchFailures,
     (unsigned long)m.unexpectedResetCount);
 }
@@ -391,6 +393,10 @@ void pollBleIntegration() {
     if(c=='\r' || c=='\n') {
       if(length || overflow) {
         command[length]=0;
+        // UI tuning executes on the app loop, outside the BLE receiver mutex.
+        if(!overflow && SerialLog::command(command)) { length=0; overflow=false; continue; }
+        if(!overflow) InfoLog.printf("Serial > %s\n",command);
+        if(!overflow && handleUiSerialCommand(command)) { length=0; overflow=false; continue; }
         bool show=false,showMetrics=false,resetMetrics=false,recognized=true;
         int permissiveCommand=-1;
         BLETestReceiver::Stats snapshot; uint64_t dropped; bool stopBle=false;
@@ -399,7 +405,7 @@ void pollBleIntegration() {
         else if(!strcmp(command,"metrics")) showMetrics=true;
         else if(!strcmp(command,"metrics flush")) resetMetrics=true;
         else if(!strcmp(command,"stats")) show=true;
-        else if(!strcmp(command,"reset")) { receiver.reset(); xQueueReset(reports); xQueueReset(rawWrites); droppedLogs=0; droppedRawLogs=0; }
+        else if(!strcmp(command,"receiver reset")) { receiver.reset(); xQueueReset(reports); xQueueReset(rawWrites); droppedLogs=0; droppedRawLogs=0; }
         else if(!strcmp(command,"verbose on")) receiver.setVerbose(true);
         else if(!strcmp(command,"verbose off")) { receiver.setVerbose(false); xQueueReset(reports); }
         else if(!strcmp(command,"raw on")) rawLogging=true;
@@ -419,11 +425,11 @@ void pollBleIntegration() {
         if(showMetrics) printMetrics();
         else if(resetMetrics) {
           const bool saved=MetricsStore::shared().reset();
-          Serial.println(saved ? "[METRICS] Counters cleared and saved to NVS" :
+          InfoLog.println(saved ? "[METRICS] Counters cleared and saved to NVS" :
             "[METRICS] RAM cleared, but NVS save FAILED; old persisted metrics may remain");
         }
         else if(show) printStats(snapshot,dropped);
-        else Serial.println(recognized?"OK":"Commands: metrics, metrics flush (clear counters), stats, reset, verbose on/off, raw on/off, ble off, ble permissive on/off");
+        else InfoLog.println(recognized?"OK":"ERR unknown command\ntype \"help\"");
       }
       length=0; overflow=false;
     } else if(length<sizeof(command)-1) command[length++]=c;
@@ -446,44 +452,44 @@ void pollBleIntegration() {
   bool summary=receiver.takeSummary();
   auto snapshot=receiver.stats(); uint64_t dropped=droppedLogs;
   xSemaphoreGive(receiverMutex);
-  if(connectedEvent) Serial.println("[E2E] BLE connected");
-  if(disconnectedEvent) Serial.println("[DATA] BLE disconnected; NEED_DATA retries suspended");
+  if(connectedEvent) DebugLog.println("[E2E] BLE connected");
+  if(disconnectedEvent) DebugLog.println("[DATA] BLE disconnected; NEED_DATA retries suspended");
   if(connectedEvent || requestAttempted) {
-    if(hasData) Serial.printf("[DATA] data age=%lus\n",static_cast<unsigned long>(age));
-    else Serial.println("[DATA] data age=none");
+    if(hasData) DebugLog.printf("[DATA] data age=%lus\n",static_cast<unsigned long>(age));
+    else DebugLog.println("[DATA] data age=none");
   }
   if(requestAttempted && refreshStarted) refreshStarted();
   if(requestAttempted) {
-    Serial.printf("[DATA] NEED_DATA attempt=%lu %s\n",static_cast<unsigned long>(attempt),requestSent ? "sent" : "enqueue failed; will retry");
+    DebugLog.printf("[DATA] NEED_DATA attempt=%lu %s\n",static_cast<unsigned long>(attempt),requestSent ? "sent" : "enqueue failed; will retry");
     if(requestSent) {
-      Serial.println("[BLE] requesting fresh data");
+      DebugLog.println("[BLE] requesting fresh data");
     }
   }
-  if(receivingEvent) Serial.println("[E2E] receiving payload");
+  if(receivingEvent) DebugLog.println("[E2E] receiving payload");
   if(summary) printStats(snapshot,dropped);
   RawWrite raw;
   if(xQueueReceive(rawWrites,&raw,0)==pdTRUE) printRawWrite(raw);
   BLETestReceiver::Result r;
   // Serial never holds the receiver mutex, and the callback never waits for this queue.
   if(xQueueReceive(reports,&r,0)==pdTRUE) {
-    Serial.printf("RX #%lu | %lu B | %lu chunks | %.3f ms | %s",
+    DebugLog.printf("RX #%lu | %lu B | %lu chunks | %.3f ms | %s",
       (unsigned long)r.sequence,(unsigned long)r.size,(unsigned long)r.chunks,
       r.assemblyUs/1000.0,r.status==BLETestReceiver::OK?"CRC OK":BLETestReceiver::statusName(r.status));
-    if(r.status==BLETestReceiver::SIZE_ERROR) Serial.printf(" | expected %lu | got %lu",(unsigned long)r.declared,(unsigned long)r.size);
+    if(r.status==BLETestReceiver::SIZE_ERROR) DebugLog.printf(" | expected %lu | got %lu",(unsigned long)r.declared,(unsigned long)r.size);
     if(r.status==BLETestReceiver::MALFORMED) {
-      Serial.printf(" | decoded %lu B | version %u | type %u",(unsigned long)r.decodedBytes,r.version,r.type);
-      if(r.shortFrame) Serial.print(" | frame shorter than 14 B");
-      if(r.badEscape) Serial.print(" | invalid/incomplete SLIP escape");
-      if(r.truncated) Serial.print(" | frame timeout/disconnect");
-      if(!r.shortFrame && r.version!=1) Serial.print(" | expected version 1");
-      if(!r.shortFrame && r.type!=1 && r.type!=2) Serial.print(" | expected type 1 or 2");
-      if(!r.shortFrame && r.type==2 && r.size!=0) Serial.print(" | END_TEST payload must be empty");
+      DebugLog.printf(" | decoded %lu B | version %u | type %u",(unsigned long)r.decodedBytes,r.version,r.type);
+      if(r.shortFrame) DebugLog.print(" | frame shorter than 14 B");
+      if(r.badEscape) DebugLog.print(" | invalid/incomplete SLIP escape");
+      if(r.truncated) DebugLog.print(" | frame timeout/disconnect");
+      if(!r.shortFrame && r.version!=1) DebugLog.print(" | expected version 1");
+      if(!r.shortFrame && r.type!=1 && r.type!=2) DebugLog.print(" | expected type 1 or 2");
+      if(!r.shortFrame && r.type==2 && r.size!=0) DebugLog.print(" | END_TEST payload must be empty");
     }
-    if(r.missing) Serial.printf(" | WARNING missing %llu before #%lu",r.missing,(unsigned long)r.sequence);
-    if(r.duplicate) Serial.print(" | DUPLICATE");
-    if(r.outOfOrder) Serial.print(" | OUT OF ORDER");
-    if(r.stale) Serial.print(" | OUTSIDE SEQUENCE WINDOW");
-    Serial.println();
+    if(r.missing) DebugLog.printf(" | WARNING missing %llu before #%lu",r.missing,(unsigned long)r.sequence);
+    if(r.duplicate) DebugLog.print(" | DUPLICATE");
+    if(r.outOfOrder) DebugLog.print(" | OUT OF ORDER");
+    if(r.stale) DebugLog.print(" | OUTSIDE SEQUENCE WINDOW");
+    DebugLog.println();
   }
   delay(1);
 }
@@ -526,13 +532,13 @@ bool takeTransitPayload(String& payload, uint64_t& transactionId) {
     transitText.reset();
   }
   xSemaphoreGive(receiverMutex);
-  if(overflow) Serial.println("Transit payload rejected: exceeds 2048 bytes or contains NUL");
+  if(overflow) WarnLog.println("Transit payload rejected: exceeds 2048 bytes or contains NUL");
   if(overflow) {
     DiagnosticStore::shared().count(DiagnosticCounter::InvalidPayload);
     DiagnosticStore::shared().event(EventCode::PAYLOAD_PARSE_FAILURE,LogLevel::Warn);
   }
   if(overflow && bleSession) bleSession->abortSession("transfer failed");
-  if(ready) Serial.println("[BLE] payload complete");
+  if(ready) DebugLog.println("[BLE] payload complete");
   if(ready) {
     DiagnosticStore::shared().event(EventCode::PAYLOAD_RX_COMPLETE,LogLevel::Info,payload.length());
     DiagnosticStore::shared().event(EventCode::DATA_RESPONSE_COMPLETE);
@@ -562,7 +568,7 @@ void setTransitRefreshPaused(bool paused) {
   xSemaphoreGive(receiverMutex);
   if(paused && changed && bleSession) bleSession->abortSession("session suspended for standby");
   if(!paused && changed) nextSessionAttemptMs=0;
-  if(changed) Serial.println(paused ? "[DATA] Standby: NEED_DATA paused; RAM board retained" : "[DATA] Wake: needsData=true; NEED_DATA resumes");
+  if(changed) DebugLog.println(paused ? "[DATA] Standby: NEED_DATA paused; RAM board retained" : "[DATA] Wake: needsData=true; NEED_DATA resumes");
 }
 void finishTransitRefresh(bool success) {
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
@@ -575,9 +581,9 @@ void finishTransitRefresh(bool success) {
   if(success) sawRefreshBytes=false;
   xSemaphoreGive(receiverMutex);
   if(success) {
-    Serial.println("[DATA] Complete valid train payload received; data age reset to 0");
-    Serial.println("[DATA] NEED_DATA retries stopped");
-    Serial.println("[BLE] payload committed");
+    DebugLog.println("[DATA] Complete valid train payload received; data age reset to 0");
+    DebugLog.println("[DATA] NEED_DATA retries stopped");
+    DebugLog.println("[BLE] payload committed");
     if(bleSession) bleSession->markTransactionComplete();
   } else if(bleSession) {
     bleSession->abortSession("transfer failed");
@@ -596,7 +602,7 @@ static void sendApplicationAck(uint64_t tx,uint8_t status,uint16_t bytes) {
   const bool sent=bleSession && bleSession->sendDiagnosticNotification(packet,sizeof(packet));
   DiagnosticStore::shared().event(sent ? EventCode::DATA_APPLIED_ACK_QUEUED : EventCode::DATA_APPLIED_ACK_FAILED,
     sent ? LogLevel::Info : LogLevel::Warn,bytes,status,tx);
-  Serial.printf("[DATA] ACK transaction=%lu-%lu status=%u bytes=%u queued=%u\n",
+  DebugLog.printf("[DATA] ACK transaction=%lu-%lu status=%u bytes=%u queued=%u\n",
     (unsigned long)(tx>>32),(unsigned long)tx,status,bytes,sent);
 }
 void acknowledgeTransitApplied(uint64_t tx,uint16_t bytes) {

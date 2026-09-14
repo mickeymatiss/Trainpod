@@ -42,8 +42,6 @@ struct NearbyStationsView: View {
                 }
             }
             bleDemoSection
-            DeviceUIColorSection(model: BLERuntime.shared.uiColor, bluetooth: bluetooth)
-            DeviceLiveColorSection(model: BLERuntime.shared.uiColor, bluetooth: bluetooth)
 
             switch viewModel.state {
             case .idle:
@@ -162,7 +160,7 @@ struct NearbyStationsView: View {
                 }
             }
         } header: {
-            Text("BLE Demo")
+            Text("Connection & debugging")
         }
     }
 

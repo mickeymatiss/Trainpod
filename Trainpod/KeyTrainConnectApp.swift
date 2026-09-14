@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct TrainpodApp: App {
+struct KeyTrainConnectApp: App {
     @Environment(\.scenePhase) private var scenePhase
     @UIApplicationDelegateAdaptor(BLEAppDelegate.self) private var appDelegate
     var body: some Scene {

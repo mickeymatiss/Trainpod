@@ -4,9 +4,10 @@
 constexpr uint16_t pallete::SWAMP_GREEN[5];
 constexpr uint16_t pallete::SAPPHIRE[5];
 namespace {
-// Keep the existing factory appearance until the user explicitly pushes a theme.
-const pallete::Theme factoryTheme = {{pallete::DEFAULT_UI_COLOR, 0x000000,
-  0xB39F7D, 0x000000, 0x080E17, 0xDDD1BA}};
+// Exact RGB888 factory palette; matches DeviceTheme.defaultTheme in iOS.
+// A valid user-saved theme continues to take precedence at startup.
+const pallete::Theme factoryTheme = {{pallete::DEFAULT_UI_COLOR, 0x19005D,
+  0xF70000, 0x000123, 0x000000, 0xFFB485}};
 struct StoredTheme { uint32_t version; pallete::Theme theme; };
 static_assert(sizeof(StoredTheme) == 28, "Stable theme storage layout");
 }

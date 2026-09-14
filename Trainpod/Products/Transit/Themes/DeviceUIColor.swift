@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class DeviceUIColor: ObservableObject {
     enum PushState: Equatable { case idle, sending, success, failed(String) }
-    @Published var selectedThemeID = "book_tan" {
+    @Published var selectedThemeID = DeviceTheme.defaultTheme.id {
         didSet {
             if pushState != .sending { pushState = .idle }
             if selectedThemeID != oldValue { requestLiveUpdate() }
@@ -27,11 +27,11 @@ final class DeviceUIColor: ObservableObject {
     }()
     var themes: [DeviceTheme] {
         var options = DeviceTheme.presets
-        options.insert(customTheme, at: 8) // Replaces Sunset Punch in the grid.
+        options.insert(customTheme, at: options.firstIndex { $0.id == "cobalt_ice" } ?? options.endIndex)
         return options.map { themeEdits[$0.id] ?? $0 }
     }
     var selectedTheme: DeviceTheme {
-        themes.first { $0.id == selectedThemeID } ?? DeviceTheme.presets[2]
+        themes.first { $0.id == selectedThemeID } ?? DeviceTheme.defaultTheme
     }
     func setSelectedColor(_ color: Color, at keyPath: WritableKeyPath<DeviceTheme, String>) {
         guard let hex = DeviceTheme.hex(color), selectedTheme[keyPath: keyPath] != hex else { return }

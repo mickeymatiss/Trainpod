@@ -72,6 +72,8 @@ final class BluetoothService: NSObject, ObservableObject {
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
     @Published private(set) var connectedDeviceName: String?
+    // Application identity read from this connection; never used for routing or binding.
+    @Published private(set) var connectedDeviceId: String?
     @Published private(set) var maximumWriteValueLength: Int?
     @Published private(set) var debugMessages: [String] = []
     @Published private(set) var lifecycleDiagnostics: [String] = []
@@ -181,6 +183,7 @@ final class BluetoothService: NSObject, ObservableObject {
             return
         }
         writableCharacteristic = nil
+        connectedDeviceId = nil
         connectedDeviceName = nil
         maximumWriteValueLength = nil
         setConnectionState(.scanning)
@@ -210,6 +213,7 @@ final class BluetoothService: NSObject, ObservableObject {
         dataPathStarted = false
         connectionRequestPending = false
         writableCharacteristic = nil
+        connectedDeviceId = nil
         connectedDeviceName = nil
         maximumWriteValueLength = nil
         resumePendingWrite(with: .failure(BLETransportError.writeFailed("Disconnected before write completed.")))
@@ -324,12 +328,27 @@ final class BluetoothService: NSObject, ObservableObject {
         if let characteristic = peripheral.services?
             .first(where: { $0.uuid == configuration.serviceUUID })?.characteristics?
             .first(where: { $0.uuid == configuration.characteristicUUID }) {
+            if let service = characteristic.service, let uuid = configuration.deviceIdentityUUID {
+                if let identity = service.characteristics?.first(where: { $0.uuid == uuid }) {
+                    readDeviceIdentity(identity, on: peripheral)
+                } else {
+                    peripheral.discoverCharacteristics([configuration.characteristicUUID, uuid], for: service)
+                }
+            }
             configureCharacteristic(characteristic, on: peripheral)
         } else {
             setConnectionState(.connecting)
             peripheral.discoverServices([configuration.serviceUUID])
             diagnostic("resuming service discovery id=\(peripheral.identifier)")
         }
+    }
+
+    private func readDeviceIdentity(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
+        guard characteristic.properties.contains(.read) else {
+            log("Device identity characteristic is not readable")
+            return
+        }
+        peripheral.readValue(for: characteristic)
     }
 
     private func configureCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
@@ -368,6 +387,7 @@ final class BluetoothService: NSObject, ObservableObject {
         guard self.peripheral === peripheral, peripheral.state == .connected,
               central.state == .poweredOn, BackgroundReconnectManager.active == nil else { return }
         writableCharacteristic = nil
+        connectedDeviceId = nil
         maximumWriteValueLength = nil
         dataPathStarted = true
         setConnectionState(.connecting)
@@ -477,12 +497,16 @@ final class BluetoothService: NSObject, ObservableObject {
                 }
             }
             do {
-                // Generated immediately before the single ATT write (14 bytes, fits MTU 23).
-                let unixMs = UInt64(Date().timeIntervalSince1970 * 1000)
+                // T2 adds signed local UTC-offset minutes; 16 bytes still fits MTU 23.
+                let clockDate = Date()
+                let unixMs = UInt64(clockDate.timeIntervalSince1970 * 1000)
                 let id = UInt32(session, radix: 16) ?? 1
-                var packet = Data([0x54, 0x31])
+                var packet = Data([0x54, 0x32])
                 for shift in stride(from: 0, to: 64, by: 8) { packet.append(UInt8(truncatingIfNeeded: unixMs >> shift)) }
                 for shift in stride(from: 0, to: 32, by: 8) { packet.append(UInt8(truncatingIfNeeded: id >> shift)) }
+                let offset = UInt16(bitPattern: Int16(TimeZone.current.secondsFromGMT(for: clockDate) / 60))
+                packet.append(UInt8(truncatingIfNeeded: offset))
+                packet.append(UInt8(truncatingIfNeeded: offset >> 8))
                 PhoneDiagnosticLog.shared.record("TIME_SYNC_SENT", sessionId: session, value1: Int64(unixMs))
                 try await self.write(packet, mode: .withResponse)
             } catch {
@@ -646,6 +670,7 @@ extension BluetoothService: CBCentralManagerDelegate {
                 connectionRequestPending = false
                 dataPathStarted = false
                 writableCharacteristic = nil
+                connectedDeviceId = nil
                 connectionEndedHandler?()
                 resumePendingWrite(with: .failure(BLETransportError.notReady(configuration.deviceName)))
                 setConnectionState(.error("Bluetooth is turned off."))
@@ -658,6 +683,7 @@ extension BluetoothService: CBCentralManagerDelegate {
                 retrieveAfterReset = true
                 dataPathStarted = false
                 writableCharacteristic = nil
+                connectedDeviceId = nil
                 connectionEndedHandler?()
                 resumePendingWrite(with: .failure(BLETransportError.notReady(configuration.deviceName)))
                 setConnectionState(.error("Bluetooth is resetting."))
@@ -766,6 +792,7 @@ extension BluetoothService: CBCentralManagerDelegate {
             connectionRequestPending = false
             dataPathStarted = false
             writableCharacteristic = nil
+            connectedDeviceId = nil
             connectionEndedHandler?()
             resumePendingWrite(with: .failure(BLETransportError.notReady(configuration.deviceName)))
             if autoScanEnabled {
@@ -800,6 +827,7 @@ extension BluetoothService: CBCentralManagerDelegate {
         connectionRequestPending = isReconnecting
         dataPathStarted = false
         writableCharacteristic = nil
+        connectedDeviceId = nil
         connectedDeviceName = nil
         maximumWriteValueLength = nil
         connectionEndedHandler?()
@@ -859,7 +887,7 @@ extension BluetoothService: CBPeripheralDelegate {
             }
 
             log("Discovering characteristic \(configuration.characteristicUUID.uuidString)")
-            peripheral.discoverCharacteristics([configuration.characteristicUUID], for: service)
+            peripheral.discoverCharacteristics([configuration.characteristicUUID] + [configuration.deviceIdentityUUID].compactMap { $0 }, for: service)
         }
     }
 
@@ -882,6 +910,14 @@ extension BluetoothService: CBPeripheralDelegate {
             }.joined(separator: ", ") ?? "none"
             guard BackgroundReconnectManager.active == nil else { return }
             log("Discovered characteristics: \(characteristics)")
+            guard service.uuid == configuration.serviceUUID else { return }
+            if let uuid = configuration.deviceIdentityUUID {
+                if let identity = service.characteristics?.first(where: { $0.uuid == uuid }) {
+                    readDeviceIdentity(identity, on: peripheral)
+                } else {
+                    log("Device identity unavailable (older firmware)")
+                }
+            }
 
             guard let characteristic = service.characteristics?.first(where: { $0.uuid == configuration.characteristicUUID }) else {
                 setConnectionState(.error("\(configuration.deviceName) write characteristic was not found."))
@@ -895,6 +931,25 @@ extension BluetoothService: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         // Capture callback data before hopping to the main actor; the characteristic is mutable.
         let received = characteristic.value
+        if MainActor.assumeIsolated({
+            guard peripheral === self.peripheral,
+                  peripheral.state == .connected,
+                  let uuid = configuration.deviceIdentityUUID,
+                  characteristic.uuid == uuid,
+                  characteristic.service?.uuid == configuration.serviceUUID else { return false }
+            if let error {
+                log("Device identity read failed: \(error.localizedDescription)")
+                return true
+            }
+            guard let received, let id = String(data: received, encoding: .utf8),
+                  id.range(of: "^TP-(?:[0-9A-F]{8}|[0-9A-F]{32})$", options: .regularExpression) != nil else {
+                log("Device identity read returned an invalid value")
+                return true
+            }
+            connectedDeviceId = id
+            FileLogger.shared.log("[BLE] Connected TrainPod ID: \(id)")
+            return true
+        }) { return }
         if MainActor.assumeIsolated({
             guard peripheral === self.peripheral, characteristic === writableCharacteristic,
                   error == nil,

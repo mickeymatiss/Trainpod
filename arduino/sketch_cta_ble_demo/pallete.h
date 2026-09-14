@@ -6,7 +6,7 @@
 // Central display palette. BLE and NVS use RGB888; rendering uses RGB565.
 class pallete {
 public:
-  static constexpr uint32_t DEFAULT_UI_COLOR = 0xD6CCBB;
+  static constexpr uint32_t DEFAULT_UI_COLOR = 0xFFECEA;
   static void begin();
   // RGB888 order matches the app and the version-1 BLE theme protocol.
   enum Role { Background, PrimaryText, Detail, SecondaryText, ArrivalBadge, ArrivalBadgeText, RoleCount };

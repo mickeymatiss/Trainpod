@@ -9,6 +9,10 @@ public:
   uint8_t opacity = 255;
   bool active = false;
   void reset(int next) { value = target = next; opacity = 255; active = false; }
+  void appear(int next,uint32_t now) {
+    value=target=next;opacity=0;active=true;fadingIn=true;
+    started=lastFrame=now;
+  }
   void request(int next, uint32_t now) {
     if (next == target) return;
     target = next;

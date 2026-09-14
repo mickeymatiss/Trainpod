@@ -1,3 +1,24 @@
+# Current selected firmware — September 14, 2026
+
+The current changelog is in the repository's `CHANGELOG.md`. Current serial
+appearance controls and defaults are in [docs/DISPLAY-EFFECTS.md](docs/DISPLAY-EFFECTS.md),
+with [night brightness](docs/NIGHT-BRIGHTNESS.md) and
+[serial logging](docs/SERIAL-LOGGING.md) documented separately.
+
+The selected version includes persistent device identity, the uniform instrument
+UI, typography, staggered transitions, button feedback, bloom, lip and depth.
+Experimental scan, lens and bevel variation code/controls are removed.
+The app is KeyTrain Connect, with matching identity and T2 local-time support.
+Firmware updates must preserve NVS to retain identity and saved themes.
+
+No build, test or flash was performed for this selection/commit pass.
+
+## Historical implementation notes
+
+The entries below describe earlier iterations. Their defaults, UI labels, command
+names and validation statements may predate the current version. Prefer the
+current documents linked above when operating the device.
+
 ## Product file organization
 
 Transit product code is now grouped into `app`, `data`, `input`, `ble`, and `ui`.

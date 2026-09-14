@@ -1,4 +1,4 @@
-"""Generate device GFX fonts: python generate_barlow_font.py FONT.ttf OUTPUT_DIR.
+"""Generate device GFX fonts: python generate_barlow_font.py FONT.ttf OUTPUT_DIR [SIZE ...].
 
 Requires Pillow. Barlow Condensed is SIL OFL 1.1; keep its license
 with these generated headers. ETA and distance values use separate numeral fonts in the UI.
@@ -12,7 +12,7 @@ if style not in ('Regular', 'SemiBold', 'Bold', 'Italic'):
     raise ValueError('Expected BarlowCondensed-Regular, -SemiBold, -Bold, or -Italic.ttf')
 out = Path(sys.argv[2])
 out.mkdir(parents=True, exist_ok=True)
-for size in (12, 16, 20, 24):
+for size in (tuple(map(int, sys.argv[3:])) if len(sys.argv) > 3 else (12, 16, 20, 24)):
     font = ImageFont.truetype(sys.argv[1], size)
     name = f'BarlowCondensed{style}{size}'
     bitmap, glyphs = [], []

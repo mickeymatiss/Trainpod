@@ -1,3 +1,4 @@
+#include "../diagnostics/SerialLog.h"
 #pragma once
 #include <Arduino.h>
 #include <NimBLEDevice.h>
@@ -27,17 +28,17 @@ public:
   }
   void enterBleOffState() {
     const auto handle=handle_.load();
-    if(handle==BLE_HS_CONN_HANDLE_NONE) { Serial.println("[WAKE] Connect the iPhone before ble off."); return; }
+    if(handle==BLE_HS_CONN_HANDLE_NONE) { DebugLog.println("[WAKE] Connect the iPhone before ble off."); return; }
     enabled_=true;
     off_=true; // Set before disconnect so its callback cannot restart advertising.
     server_->advertiseOnDisconnect(false);
     NimBLEDevice::stopAdvertising();
     if(!server_->disconnect(handle)) {
       off_=false; enabled_=false;
-      Serial.println("[WAKE] Disconnect request failed; BLE-off test not entered.");
+      DebugLog.println("[WAKE] Disconnect request failed; BLE-off test not entered.");
       return;
     }
-    Serial.printf("[WAKE] %lu ms: disconnect requested; advertising stopped. Await GPIO 9 button.\n",millis());
+    DebugLog.printf("[WAKE] %lu ms: disconnect requested; advertising stopped. Await GPIO 9 button.\n",millis());
   }
   void wakeBle() {
     if(!off_.load() || handle_.load()!=BLE_HS_CONN_HANDLE_NONE) return;
@@ -45,12 +46,12 @@ public:
     if(onWake_) onWake_();
     off_=false;
     startAdvertising();
-    Serial.printf("[WAKE] %lu ms: button pressed; advertising same identity/service.\n",millis());
+    DebugLog.printf("[WAKE] %lu ms: button pressed; advertising same identity/service.\n",millis());
   }
   void startAdvertising() { if(!off_.load()) NimBLEDevice::startAdvertising(); }
   void poll() {
-    if(connectedEvent_.exchange(false)) Serial.printf("[WAKE] %lu ms: BLE connection established; no payload sent.\n",millis());
-    if(offEvent_.exchange(false)) Serial.printf("[WAKE] %lu ms: disconnected; BLE unavailable until button press.\n",millis());
+    if(connectedEvent_.exchange(false)) DebugLog.printf("[WAKE] %lu ms: BLE connection established; no payload sent.\n",millis());
+    if(offEvent_.exchange(false)) DebugLog.printf("[WAKE] %lu ms: disconnected; BLE unavailable until button press.\n",millis());
     const int sample=digitalRead(BUTTON_PIN);
     const auto now=millis();
     if(sample!=reading_) { reading_=sample; changed_=now; }

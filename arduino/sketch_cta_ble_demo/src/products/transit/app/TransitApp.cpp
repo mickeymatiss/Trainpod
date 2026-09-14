@@ -1,3 +1,5 @@
+#include "../../../platform/diagnostics/SerialLog.h"
+#include "../../../platform/device/DeviceIdentity.h"
 #include <Arduino_GFX_Library.h>
 #include "../ble/BleIntegration.h"
 #include "../ui/ArrivalScreen.h"
@@ -6,6 +8,7 @@
 #include "../input/ButtonTap.h"
 #include "../../../platform/power/PowerLifecycle.h"
 #include "../../../platform/power/BacklightFade.h"
+#include "../../../platform/power/NightBrightness.h"
 #include "../../../platform/diagnostics/DiagnosticStore.h"
 #include "../../../platform/metrics/MetricsStore.h"
 #include "../../../platform/power/PerformanceMode.h"
@@ -16,6 +19,11 @@ Arduino_GFX* gfx = deviceDisplay();
 BacklightFade backlight(LCD_BL);
 ArrivalScreen arrivalScreen(*gfx);
 bool displayReady = false;
+bool screenDarkLogged = false;
+bool handleUiSerialCommand(const char* command) {
+  if(NightBrightness::shared().command(command)) return true;
+  return displayReady && arrivalScreen.effectsCommand(command,millis());
+}
 int lastButtonReading = HIGH, buttonState = HIGH;
 uint32_t lastButtonChangeMs = 0;
 ButtonTap navigationTaps;
@@ -25,10 +33,10 @@ bool holdArmed = false, holdTriggered = false, tapEligible = false;
 
 void navigate(ButtonTap::Action action, uint32_t now) {
   if (action == ButtonTap::Action::Platform) {
-    Serial.println("[UI] Single tap: next platform");
+    DebugLog.println("[UI] Single tap: next platform");
     arrivalScreen.nextPlatform(now);
   } else if (action == ButtonTap::Action::Station) {
-    Serial.println("[UI] Double tap: next station");
+    DebugLog.println("[UI] Double tap: next station");
     arrivalScreen.nextStation(now);
   }
 }
@@ -42,21 +50,21 @@ void powerStateChanged(PowerState previous, PowerState next, uint32_t now) {
   switch (next) {
     case PowerState::ACTIVE:
       if (previous == PowerState::SCREEN_OFF_STANDBY) {
-        Serial.println("[POWER] SCREEN_OFF_STANDBY -> ACTIVE; restoring cached UI");
+        DebugLog.println("[POWER] SCREEN_OFF_STANDBY -> ACTIVE; restoring cached UI");
         arrivalScreen.setConnected(bleIsReady());
         if (displayReady) arrivalScreen.resume(now);
-        backlight.fadeTo(PowerConfig::ACTIVE_BRIGHTNESS, millis(), PowerConfig::BACKLIGHT_FADE_MS);
+        backlight.fadeTo(NightBrightness::shared().activeLevel(), millis(), PowerConfig::BACKLIGHT_FADE_MS);
         // Requests run in the normal BLE poll, after the old board is visible.
         setTransitRefreshPaused(false);
       } else {
-        backlight.fadeTo(PowerConfig::ACTIVE_BRIGHTNESS, millis(), PowerConfig::BACKLIGHT_FADE_MS);
-        Serial.println(previous == PowerState::DIMMED ? "[POWER] DIMMED -> ACTIVE" : "[POWER] State: ACTIVE");
+        backlight.fadeTo(NightBrightness::shared().activeLevel(), millis(), PowerConfig::BACKLIGHT_FADE_MS);
+        DebugLog.println(previous == PowerState::DIMMED ? "[POWER] DIMMED -> ACTIVE" : "[POWER] State: ACTIVE");
       }
       break;
     case PowerState::DIMMED:
       navigationTaps.reset();
-      backlight.fadeTo(PowerConfig::DIM_BRIGHTNESS, millis(), PowerConfig::BACKLIGHT_FADE_MS);
-      Serial.println("[POWER] Inactivity timeout: ACTIVE -> DIMMED");
+      backlight.fadeTo(std::min(PowerConfig::DIM_BRIGHTNESS,NightBrightness::shared().activeLevel()), millis(), PowerConfig::BACKLIGHT_FADE_MS);
+      DebugLog.println("[POWER] Inactivity timeout: ACTIVE -> DIMMED");
       break;
     case PowerState::SCREEN_OFF_STANDBY:
       navigationTaps.reset();
@@ -66,7 +74,7 @@ void powerStateChanged(PowerState previous, PowerState next, uint32_t now) {
       MetricsStore::shared().recordBootDataFailure(); // No-op after a startup outcome.
       MetricsStore::shared().flush(); // Save short sessions; no BLE mutex is held.
       DiagnosticStore::shared().flush();
-      Serial.println("[POWER] DIMMED -> SCREEN_OFF_STANDBY; CPU awake, BLE OFF");
+      DebugLog.println("[POWER] DIMMED -> SCREEN_OFF_STANDBY; CPU awake, BLE OFF");
       break;
   }
 }
@@ -81,12 +89,14 @@ void uiColorChanged() {
 void setupTransitApp() {
   setPerformanceMode(PerformanceMode::ACTIVE);
   Serial.begin(115200);
+  DeviceIdentity::begin();
   MetricsStore::shared().begin();
   DiagnosticStore::shared().begin();
   pallete::begin();
   backlight.begin();
   pinMode(BUTTON_PIN, INPUT_PULLUP);
-  lastButtonReading = buttonState = digitalRead(BUTTON_PIN);
+  lastButtonReading = digitalRead(BUTTON_PIN);
+  buttonState = HIGH; // A button held at boot still produces a debounced down edge.
   lastButtonChangeMs = millis();
   displayReady = gfx->begin();
   if (displayReady) {
@@ -95,7 +105,7 @@ void setupTransitApp() {
     arrivalScreen.setBatteryPercent(-1); // No battery ADC configured on this prototype.
   } else {
     DiagnosticStore::shared().event(EventCode::ERROR_GENERIC,LogLevel::Error,100);
-    Serial.println("LCD init failed");
+    WarnLog.println("LCD init failed");
   }
   setupBleIntegration(beginRefreshDisplay, uiColorChanged);
   powerLifecycle.begin(millis());
@@ -106,21 +116,25 @@ void loopTransitApp() {
   const uint32_t now = millis();
   // Debounce once, before inactivity processing: a real press wins at a timeout.
   const int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButtonReading) lastButtonChangeMs = now;
+  if (reading != lastButtonReading) {
+    lastButtonChangeMs = now;
+  }
   if (uint32_t(now-lastButtonChangeMs) >= PowerConfig::BUTTON_DEBOUNCE_MS && reading != buttonState) {
     buttonState = reading;
     if (buttonState == LOW) {
       MetricsStore::shared().recordButtonPress();
       DiagnosticStore::shared().event(EventCode::BUTTON_PRESSED,LogLevel::Info);
       const auto action = powerLifecycle.buttonPressed(now);
+      if(displayReady) arrivalScreen.buttonChanged(true,now);
       buttonPressedMs = now;
       holdArmed = true;
       holdTriggered = false;
       tapEligible = action == PowerButtonAction::NAVIGATE && !bleWakeTestEnabled();
       if (!tapEligible) navigationTaps.reset();
       if (action == PowerButtonAction::WAKE_ONLY)
-        Serial.println("[POWER] Wake-only button press consumed");
+        DebugLog.println("[POWER] Wake-only button press consumed");
     } else {
+      if(displayReady) arrivalScreen.buttonChanged(false,now);
       // Commit only short, eligible taps. A hold never also navigates.
       if (holdArmed && !holdTriggered && tapEligible && !bleWakeTestEnabled() &&
           uint32_t(now-buttonPressedMs) < BLE_HOLD_MS)
@@ -136,6 +150,8 @@ void loopTransitApp() {
     openBleManualWindow();
   }
   lastButtonReading = reading;
+  // A physically held tab (or explicit serial hold) must remain visible.
+  if(buttonState==LOW || arrivalScreen.feedbackHeld()) powerLifecycle.buttonPressed(now);
   powerLifecycle.tick(now);
   if (powerLifecycle.state() != PowerState::ACTIVE || bleWakeTestEnabled()) navigationTaps.reset();
   else if (buttonState == HIGH) navigate(navigationTaps.tick(now), now);
@@ -145,7 +161,16 @@ void loopTransitApp() {
   pollBleIntegration();
   MetricsStore::shared().tick(millis()); // Still flush periodically in screen-off standby.
   DiagnosticStore::shared().tick(millis());
+  const uint8_t activeBrightness=NightBrightness::shared().activeLevel();
+  const uint8_t targetBrightness=powerLifecycle.isStandby() ? 0 :
+    powerLifecycle.state()==PowerState::DIMMED ? std::min(PowerConfig::DIM_BRIGHTNESS,activeBrightness) : activeBrightness;
+  backlight.fadeTo(targetBrightness,millis(),PowerConfig::BACKLIGHT_FADE_MS);
   backlight.update(millis()); // Continue fading even while rendering is suspended.
+  if(!powerLifecycle.isStandby()) screenDarkLogged=false;
+  else if(backlight.isDark() && !screenDarkLogged) {
+    InfoLog.println("Screen dark; standby (CPU awake)");
+    screenDarkLogged=true;
+  }
   if (powerLifecycle.isStandby()) {
     setPerformanceMode(PerformanceMode::IDLE);
     return;
@@ -167,8 +192,8 @@ void loopTransitApp() {
       acknowledgeTransitApplied(transactionId,payload.length());
       finishTransitRefresh(true);
       DiagnosticStore::shared().event(EventCode::FETCH_SUCCESS,LogLevel::Info,0,0,transactionId);
-      Serial.println("[DISPLAY] Arrival board accepted");
-      Serial.printf("[BLE] Received platformCount=%u\n", unsigned(board.platformCount));
+      InfoLog.println("Message received: arrival board updated");
+      DebugLog.printf("[BLE] Received platformCount=%u\n", unsigned(board.platformCount));
     } else {
       MetricsStore::shared().recordBootDataFailure();
       const uint8_t parseError=result==ArrivalPayloadResult::unavailable ? 2 : 1;
@@ -181,14 +206,14 @@ void loopTransitApp() {
         DiagnosticStore::shared().count(DiagnosticCounter::InvalidPayload);
 
       }
-      Serial.println(result == ArrivalPayloadResult::unavailable ? "[DISPLAY] Unavailable; retaining cached arrivals" : "[DISPLAY] Invalid payload; retaining cached arrivals");
+      WarnLog.println(result == ArrivalPayloadResult::unavailable ? "[DISPLAY] Unavailable; retaining cached arrivals" : "[DISPLAY] Invalid payload; retaining cached arrivals");
     }
   }
   if (takeTransitRefreshFailure()) {
     MetricsStore::shared().recordBootDataFailure();
-    Serial.println("[DISPLAY] Refresh failed; retaining cached arrivals");
+    DebugLog.println("[DISPLAY] Refresh failed; retaining cached arrivals");
   }
   if (displayReady) arrivalScreen.tick(now);
   // Parsing, rendering and flash writes are complete; live BLE prevents IDLE.
-  setPerformanceMode(PerformanceMode::IDLE);
+  setPerformanceMode(displayReady && arrivalScreen.animationNeedsPerformance(millis()) ? PerformanceMode::ACTIVE : PerformanceMode::IDLE);
 }

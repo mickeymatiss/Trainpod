@@ -1,3 +1,4 @@
+#include "../diagnostics/SerialLog.h"
 #include "MetricsStore.h"
 #include "../power/PerformanceMode.h"
 #include <Arduino.h>
@@ -31,7 +32,7 @@ void MetricsStore::begin() {
       preferences_.end();
     }
   }
-  if (!storageReady_) Serial.println("[METRICS] NVS unavailable/incompatible; using RAM only");
+  if (!storageReady_) WarnLog.println("[METRICS] NVS unavailable/incompatible; using RAM only");
   if (metrics_.startupPending) increment(metrics_.bootDataFailureCount);
   metrics_.startupPending = 1;
   increment(metrics_.bootCount);
@@ -74,7 +75,7 @@ bool MetricsStore::flush() {
   if (!setPerformanceMode(PerformanceMode::ACTIVE)) return false;
   // NVS atomically replaces one fixed-size blob. No flash access under the lock.
   if (preferences_.putBytes("aggregate", &snapshot, sizeof(snapshot)) != sizeof(snapshot)) {
-    Serial.println("[METRICS] NVS write failed; retaining dirty RAM counters");
+    WarnLog.println("[METRICS] NVS write failed; retaining dirty RAM counters");
     return false;
   }
   portENTER_CRITICAL(&mutex_);

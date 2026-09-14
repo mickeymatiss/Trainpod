@@ -12,5 +12,6 @@ enum TransitBLEConfiguration {
         connectedMessage: "Ready to send train data.",
         controlMessages: [Data("NEED_DATA".utf8), Data("REFRESH_REQUEST".utf8)],
         ignoredControlMessage: "[E2E] NEED_DATA ignored: reconnect-only test is armed",
-        supportsDiagnosticsTimeSync: true)
+        supportsDiagnosticsTimeSync: true,
+        deviceIdentityUUID: CBUUID(string: "7A1C0003-8F4A-4D2B-9A57-1C2D3E4F5001"))
 }
