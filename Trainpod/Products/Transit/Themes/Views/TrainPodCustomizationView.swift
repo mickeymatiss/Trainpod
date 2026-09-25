@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TrainPodCustomizationView: View {
+    @ObservedObject private var displayMode = BLERuntime.shared.displayMode
     @ObservedObject private var model = BLERuntime.shared.uiColor
     @ObservedObject private var bluetooth = BLERuntime.shared.bluetooth
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -12,11 +13,36 @@ struct TrainPodCustomizationView: View {
                     Text("A little color")
                         .font(.title2.weight(.semibold))
                     paletteChoices
-                    ThemePreview(theme: model.selectedTheme)
+                    ThemePreview(theme: model.selectedTheme, compact: displayMode.selected == .compact)
                     Text(model.selectedTheme.name)
                         .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 10)
+            }
+            Section {
+                Picker("Display mode", selection: $displayMode.selected) {
+                    ForEach(DeviceDisplayMode.Mode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(displayMode.busy)
+                Button("Save display mode to TrainPod") { displayMode.save() }
+                    .disabled(!displayMode.canSave)
+                if displayMode.busy {
+                    ProgressView(displayMode.status ?? "Syncing mode…")
+                } else if let status = displayMode.status {
+                    Text(status).font(.caption)
+                        .foregroundStyle(displayMode.failed ? Color.red : Color.secondary)
+                }
+                if displayMode.failed || displayMode.confirmed == nil {
+                    Button("Read mode from TrainPod") { displayMode.read() }
+                        .disabled(!displayMode.canSend)
+                }
+            } header: {
+                Text("Display mode")
+            } footer: {
+                Text("Standard shows three arrivals. Compact shows six, across each row, without destinations. Save while connected; your TrainPod remembers the mode.")
             }
             Section {
                 Toggle("Update device live", isOn: $model.liveEnabled)

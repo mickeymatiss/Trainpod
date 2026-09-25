@@ -20,7 +20,7 @@ protocol TransitPayloadProvider {
 
 /// Resolve the current station context; share fresh API data with the foreground UI.
 @MainActor
-final class LiveTransitProvider: ObservableObject, TransitPayloadProvider {
+final class DirectTransitPayloadProvider: ObservableObject, TransitPayloadProvider {
     private let location = LocationService()
     private let stations = CTAStationRepository()
     private let cache = TransitDataCache.shared
@@ -29,6 +29,9 @@ final class LiveTransitProvider: ObservableObject, TransitPayloadProvider {
     func enableBackgroundLocation() { location.enableBackgroundLocation() }
 
     func currentPayload() async throws -> Data {
+        guard TransitAgency.selected.systemID.supportsLegacySource else {
+            throw LegacyTransitUnavailable(system: TransitAgency.selected.systemID)
+        }
         if let inFlight {
             FileLogger.shared.log("[CACHE] Context/API refresh already in progress; coalescing request")
             let agency = TransitAgency.selected
@@ -69,7 +72,7 @@ final class LiveTransitProvider: ObservableObject, TransitPayloadProvider {
             PhoneDiagnosticLog.shared.record("STATION_RESOLUTION_STARTED", sessionId: diagnosticSession)
             if agency == .mta {
                 let stations = try await MTAStationRepository.shared.nearest(to: fix)
-                let nearby = try await MTAClient.shared.arrivals(for: stations)
+                let nearby = try await MTAClient.shared.arrivals(for: stations, maxAge: 60)
                 guard TransitAgency.selected == agency,
                   agency != .mta || MTALocationMode.selected == mtaLocationMode else { throw CancellationError() }
                 return try LiveTransitFormatter.payload(from: nearby)
@@ -87,7 +90,7 @@ final class LiveTransitProvider: ObservableObject, TransitPayloadProvider {
                 return left == right ? $0.mapID < $1.mapID : left < right
             }
             PhoneDiagnosticLog.shared.record("STATION_RESOLUTION_SUCCESS", sessionId: diagnosticSession, value1: Int64(nearest.count))
-            let payload = try await self.cache.result(for: nearest).payload
+            let payload = try await self.cache.result(for: nearest, maxAge: 60).payload
             guard TransitAgency.selected == agency,
                   agency != .mta || MTALocationMode.selected == mtaLocationMode else { throw CancellationError() }
             return payload

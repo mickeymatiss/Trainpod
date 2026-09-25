@@ -3,7 +3,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
-#include "../../../platform/power/PerformanceMode.h"
+#include <new>
 
 void ArrivalScreen::logSpringState() {
   if(springLoggedState==springBlock.state) return;
@@ -38,17 +38,16 @@ void ArrivalScreen::drawSpring(uint32_t now) {
   if(!springBlock.moving() && !springVisible && springBlock.position==0) return;
   if(!springInvalidated && !springBlock.moving() && int(springBlock.position+0.5f)==springPaintedPosition) return;
   if(!springInvalidated && uint32_t(now-springLastFrame)<16) return;
-  if(!setPerformanceMode(PerformanceMode::ACTIVE)) return;
   springLastFrame=now;
   if(!springCanvas) {
-    springCanvas.reset(new Arduino_Canvas(76,22,nullptr));
-    if(!springCanvas->begin()) { springCanvas.reset(); return; }
+    springCanvas.reset(new (std::nothrow) Arduino_Canvas(76,22,nullptr));
+    if(!springCanvas || !springCanvas->begin()) { springCanvas.reset(); renderError="spring framebuffer allocation"; return; }
     springInvalidated=true;
   }
   if(springInvalidated) {
     if(!navigationCanvas) {
-      navigationCanvas.reset(new Arduino_Canvas(gfx.width(),gfx.height(),nullptr));
-      if(!navigationCanvas->begin()) { navigationCanvas.reset(); return; }
+      navigationCanvas.reset(new (std::nothrow) Arduino_Canvas(gfx.width(),gfx.height(),nullptr));
+      if(!navigationCanvas || !navigationCanvas->begin()) { navigationCanvas.reset(); renderError="framebuffer allocation"; return; }
     }
     // Recompose normal footer beneath the overlay, including any text or gauge.
     // RAM only: no visible erase frame, and never read back pixels from the TFT.

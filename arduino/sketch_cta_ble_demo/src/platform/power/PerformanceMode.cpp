@@ -3,7 +3,13 @@
 #include <NimBLEDevice.h>
 #include <esp32-hal-cpu.h>
 
+static bool displayPerformancePinned=false;
+void pinDisplayPerformance() {
+  setPerformanceMode(PerformanceMode::ACTIVE);
+  displayPerformancePinned=true;
+}
 bool setPerformanceMode(PerformanceMode mode) {
+  if(displayPerformancePinned) return mode==PerformanceMode::ACTIVE;
   // Failed cleanup must not allow downclocking with a live BLE stack.
   if (mode == PerformanceMode::IDLE &&
       (BleSession::anySessionActive() || NimBLEDevice::isInitialized())) return false;

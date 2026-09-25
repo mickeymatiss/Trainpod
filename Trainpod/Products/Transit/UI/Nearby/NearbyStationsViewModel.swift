@@ -15,6 +15,7 @@ final class NearbyStationsViewModel: ObservableObject {
 
     @Published private(set) var state: ViewState = .idle
 
+    private let servingProvider = LiveTransitProvider()
     private let locationService = LocationService()
     private let stationRepository = CTAStationRepository()
     private let transitCache = TransitDataCache.shared
@@ -63,44 +64,11 @@ final class NearbyStationsViewModel: ObservableObject {
     }
 
     private func loadNearbyStationsAndRefresh() async -> [StationArrivals]? {
-        do {
-            state = .requestingLocation
-            let mtaLocationMode = MTALocationMode.selected
-            let location: CLLocation
-            if agency == .mta, let testLocation = mtaLocationMode.locationOverride {
-                location = testLocation
-            } else {
-                location = try await locationService.requestCurrentLocation()
-                try Task.checkCancellation()
-                transitCache.rememberLocation(location)
-            }
-
-            state = .loadingStationMetadata
-            if agency == .mta {
-                let stations = try await MTAStationRepository.shared.nearest(to: location)
-                state = .loadingArrivals
-                let nearby = try await MTAClient.shared.arrivals(for: stations)
-                try Task.checkCancellation()
-                guard TransitAgency.selected == .mta, MTALocationMode.selected == mtaLocationMode else { throw CancellationError() }
-                state = .loaded(nearby, updatedAt: Date())
-                return nearby
-            }
-            let stations = try await stationRepository.loadStations()
-            try Task.checkCancellation()
-            selectedStations = nearestStations(to: location, from: stations)
-
-            guard selectedStations.count >= 2 else {
-                state = .error("Fewer than two valid CTA rail stations were found.")
-                return nil
-            }
-
-            return try await refreshArrivals(showLoadingState: true)
-        } catch is CancellationError {
-            return nil
-        } catch {
+        state = .requestingLocation
+        do { return try await refreshArrivals(showLoadingState: true) }
+        catch {
             guard !Task.isCancelled else { return nil }
             state = .error(error.localizedDescription)
-            FileLogger.shared.log("[REFRESH] Location or station loading failed code=\((error as NSError).code)")
             return nil
         }
     }
@@ -129,28 +97,17 @@ final class NearbyStationsViewModel: ObservableObject {
 
     private func refreshArrivals(showLoadingState: Bool) async throws -> [StationArrivals] {
         guard !isRefreshing else {
-            if case .loaded(let stationArrivals, _) = state {
-                return stationArrivals
-            }
+            if case .loaded(let arrivals, _) = state { return arrivals }
             return []
         }
-
         isRefreshing = true
-        FileLogger.shared.log("[REFRESH] UI refresh started")
         defer { isRefreshing = false }
-
-        if showLoadingState {
-            state = .loadingArrivals
-        }
-
-        let cached = try await transitCache.result(for: selectedStations)
-        let stationArrivals = cached.arrivals
-
+        if showLoadingState { state = .loadingArrivals }
+        let result = try await servingProvider.currentArrivals()
         try Task.checkCancellation()
-        guard TransitAgency.selected == .cta else { throw CancellationError() }
-        state = .loaded(stationArrivals, updatedAt: cached.fetchedAt)
-        FileLogger.shared.log(stationArrivals.isEmpty ? "[REFRESH] UI refresh failed" : "[REFRESH] UI refresh completed")
-        return stationArrivals
+        selectedStations = result.stations.map(\.station)
+        state = .loaded(result.stations, updatedAt: result.completedAt)
+        return result.stations
     }
 
     private func nearestStations(to location: CLLocation, from stations: [CTAStation]) -> [CTAStation] {

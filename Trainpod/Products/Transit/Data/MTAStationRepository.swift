@@ -2,7 +2,7 @@ import CoreLocation
 import Foundation
 
 enum TransitAgency: String, CaseIterable, Identifiable {
-    case cta = "CTA", mta = "MTA"
+    case cta = "CTA", mta = "MTA", bart = "BART", mbta = "MBTA"
     var id: String { rawValue }
     static let preferenceKey = "transitAgency"
     static var selected: Self {

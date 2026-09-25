@@ -24,8 +24,8 @@ struct LiveTransitFormatter {
                 $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name
             }.prefix(platformsPerStation).map { direction in
                 let distance = distanceLabel(station.distanceMeters)
-                return PlatformPage(stationName: station.station.name,
-                             displayDirection: direction.name, trains: direction.trains,
+                return PlatformPage(stationName: stationLabel(station.station.name),
+                             displayDirection: directionLabel(direction.name), trains: direction.trains,
                              distanceValue: distance.value, distanceUnit: distance.unit, isMTA: station.station.id.hasPrefix("MTA-"))
             }
         }.prefix(maximumPlatforms))
@@ -47,6 +47,16 @@ struct LiveTransitFormatter {
         return String(format: "%.1f", locale: Locale(identifier: "en_US_POSIX"), meters / 1609.344)
     }
 
+    // Shared by the BLE board and compact iOS view; preserve the existing window.
+    static func upcomingTrains(_ trains: [CTAArrival], at now: Date = Date()) -> [CTAArrival] {
+        Array(trains.filter { $0.arrivalTime >= now }
+            .sorted { $0.arrivalTime < $1.arrivalTime }
+            .enumerated()
+            .filter { $0.offset < arrivalsWithoutTimeCutoff || $0.element.arrivalTime.timeIntervalSince(now) <= arrivalWindowSeconds }
+            .prefix(arrivalsPerPlatform)
+            .map(\.element))
+    }
+
     static func payload(from stations: [StationArrivals]) throws -> Data {
         // Do not silently discard unusual mixed-axis/unknown MTA buckets.
         guard !stations.prefix(maximumStations).contains(where: {
@@ -56,19 +66,9 @@ struct LiveTransitFormatter {
         guard !pages.isEmpty else { throw LiveTransitError.noDirections }
         let now = Date()
         var rows = pages.map { page in
-            // Rank upcoming trains before applying the window: the first three
-            // remain useful even when service is more than 30 minutes away.
-            page.trains.filter { $0.arrivalTime >= now }
-                .sorted { $0.arrivalTime < $1.arrivalTime }
-                .enumerated()
-                .filter {
-                    $0.offset < arrivalsWithoutTimeCutoff ||
-                        $0.element.arrivalTime.timeIntervalSince(now) <= arrivalWindowSeconds
-                }
-                .prefix(arrivalsPerPlatform).map { entry in
-                let train = entry.element
+            upcomingTrains(page.trains, at: now).map { train in
                 let eta = max(0, min(9999, Int((train.arrivalTime.timeIntervalSince(now) / 60).rounded(.up))))
-                return ["A", field(page.isMTA ? train.route.uppercased() : routeName(for: train.route), limit: 20), page.isMTA ? MTARouteStyle.hex(train.route) : routeColorHex(for: train.route),
+                return ["A", field(train.routeDisplayName ?? (page.isMTA ? train.route.uppercased() : routeName(for: train.route)), limit: 20), train.routeDisplayColor?.replacingOccurrences(of: "#", with: "") ?? (page.isMTA ? MTARouteStyle.hex(train.route) : routeColorHex(for: train.route)),
                         field(train.destination, limit: 48), String(eta)].joined(separator: "\t")
             }
         }
@@ -95,18 +95,37 @@ struct LiveTransitFormatter {
         return data
     }
 
-    static func directionLabel(_ id: String) -> String {
-        switch id.uppercased() {
-        case "N": return "North"
-        case "S": return "South"
-        case "E": return "East"
-        case "W": return "West"
-        case "NE": return "N. East"
-        case "NW": return "N. West"
-        case "SE": return "S. East"
-        case "SW": return "S. West"
-        default: return id
+    // Display labels are intentionally smaller than provider metadata. Keep
+    // names/IDs in the source models intact for selection and diagnostics.
+    static func stationLabel(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        // CTA decorates names with route lists, e.g. Morgan (Green/Pink).
+        // Remove only known route annotations, preserving real name qualifiers.
+        guard let start = trimmed.range(of: " (", options: .backwards), trimmed.hasSuffix(")") else { return trimmed }
+        let annotation = trimmed[start.upperBound..<trimmed.index(before: trimmed.endIndex)]
+        let words = annotation.lowercased().components(separatedBy: CharacterSet.letters.inverted).filter { !$0.isEmpty }
+        let routeWords: Set<String> = ["red", "blue", "green", "brown", "purple", "pink", "orange", "yellow", "line", "lines", "express", "and", "loop"]
+        guard !words.isEmpty, words.allSatisfy({ routeWords.contains($0) }) else { return trimmed }
+        return String(trimmed[..<start.lowerBound])
+    }
+
+    static func directionLabel(_ value: String) -> String {
+        let label = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directions: [(String, String)] = [
+            ("NE", "N. East"), ("NW", "N. West"), ("SE", "S. East"), ("SW", "S. West"),
+            ("Northeast", "N. East"), ("Northwest", "N. West"), ("Southeast", "S. East"), ("Southwest", "S. West"),
+            ("N. East", "N. East"), ("N. West", "N. West"), ("S. East", "S. East"), ("S. West", "S. West"),
+            ("North", "North"), ("South", "South"), ("East", "East"), ("West", "West"),
+            ("N", "North"), ("S", "South"), ("E", "East"), ("W", "West"),
+            ("Inbound", "Inbound"), ("Outbound", "Outbound"), ("Uptown", "Uptown"), ("Downtown", "Downtown")
+        ]
+        for (prefix, display) in directions {
+            let pattern = "^" + NSRegularExpression.escapedPattern(for: prefix) + "(?:bound)?(?:$|[\\s:/–—(-])"
+            if label.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil { return display }
         }
+        // Preserve unrecognized agency directions and platform identity; the
+        // firmware requires a nonempty label. Never guess a cardinal direction.
+        return label.isEmpty ? "Unknown" : label
     }
 
     private static func field(_ value: String, limit: Int) -> String {
@@ -123,7 +142,7 @@ struct LiveTransitFormatter {
         return (station, Array(station.directions.prefix(4)))
     }
 
-    private static func routeName(for route: String) -> String {
+    static func routeName(for route: String) -> String {
         switch route.lowercased() {
         case "g": return "Green"
         case "brn": return "Brown"
@@ -136,7 +155,7 @@ struct LiveTransitFormatter {
         }
     }
 
-    private static func routeColorHex(for route: String) -> String {
+    static func routeColorHex(for route: String) -> String {
         switch route.lowercased() {
         case "red": return "C60C30"
         case "blue": return "00A1DE"

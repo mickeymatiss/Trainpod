@@ -9,6 +9,9 @@ public:
   using Print::write;
   size_t write(uint8_t byte) override { return write(&byte,1); }
   size_t write(const uint8_t* data,size_t size) override;
+  static bool beginDeferred();
+  static void deferCurrentTask();
+  static void drainDeferred(); // App loop only, bounded work.
   static bool command(const char* line);
 private:
   Level level_;

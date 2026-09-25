@@ -61,9 +61,11 @@ final class MessageBridge: ObservableObject {
     private var timeoutTask: Task<Void, Never>?
     private var receiveTimeoutTask: Task<Void, Never>?
     private var generation: UInt64 = 0
+    var transitSendReadyHandler: (() -> Void)?
+    var viewModeSendReadyHandler: (() -> Void)?
     var controlSendReadyHandler: (() -> Void)?
     private var sending = false {
-        didSet { if !sending { controlSendReadyHandler?() } }
+        didSet { if !sending { transitSendReadyHandler?(); controlSendReadyHandler?(); viewModeSendReadyHandler?() } }
     }
     private var receiveBuffer = Data()
     private var receivingFrame = false

@@ -5,7 +5,7 @@
 class RefreshFlow {
 public:
   static constexpr uint32_t DATA_MAX_AGE_MS=60000;
-  static constexpr uint32_t RAPID_RETRY_MS=1500;
+  static constexpr uint32_t RESPONSE_TIMEOUT_MS=5000;
   static constexpr uint32_t SLOW_RETRY_MS=5000;
   bool hasTransitData() const { return hasData_; }
   uint32_t lastDataReceivedMs() const { return received_; }
@@ -26,11 +26,11 @@ public:
     if(requested_) { failed_=true; failedDemand_=true; }
     requested_=false; attempts_=0; // No active retry schedule while disconnected.
   }
+  void demand() { failedDemand_=true; }
   bool requested() const { return requested_; }
   bool requestRefresh(uint32_t now,bool connected,bool subscribed) {
     if(paused_ || !connected || !subscribed || !needsData(now)) return false;
-    const uint32_t interval=attempts_<4 ? RAPID_RETRY_MS : SLOW_RETRY_MS;
-    if(attempts_ && uint32_t(now-lastAttempt_)<interval) return false;
+    if(requested_ && uint32_t(now-lastAttempt_)<RESPONSE_TIMEOUT_MS) return false;
     requested_=true; lastAttempt_=now;
     if(attempts_!=UINT32_MAX) ++attempts_;
     return true;
@@ -45,7 +45,8 @@ public:
       failed_=false; failedDemand_=false; attempts_=0;
     } else {
       failed_=true; failedDemand_=true;
-      // Preserve the retry schedule; errors cannot cause a tight request loop.
+      requested_=false; attempts_=0;
+      // The canonical pipeline owns the bounded cooldown before a new episode.
     }
   }
   bool takeFailure() { const bool value=failed_; failed_=false; return value; }

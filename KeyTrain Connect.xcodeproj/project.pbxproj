@@ -11,7 +11,7 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		203E86EA304B64A500DFF95F /* Exceptions for "Trainpod" folder in "KeyTrain Connect" target */ = {
+		203E86EA304B64A500DFF95F /* Exceptions for "KeyTrain Connect" folder in "KeyTrain Connect" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
@@ -24,7 +24,7 @@
 		203E86D1304B5C2F00DFF95F /* KeyTrain Connect */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				203E86EA304B64A500DFF95F /* Exceptions for "Trainpod" folder in "KeyTrain Connect" target */,
+				203E86EA304B64A500DFF95F /* Exceptions for "KeyTrain Connect" folder in "KeyTrain Connect" target */,
 			);
 			name = "KeyTrain Connect";
 			path = Trainpod;
@@ -262,7 +262,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = D4C83367HD;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -271,10 +271,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Trainpod/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "KeyTrain Connect";
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Bluetooth is used to connect to the device and pull info.";
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Location is used to ensure the nearest stations are provided.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is needed to pull station info";
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "KeyTrain Connect uses Bluetooth to send nearby train arrivals to your TrainPod, including while your iPhone is locked.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Allow Always location access so pressing your TrainPod button can find nearby stations and fetch arrivals while your iPhone is locked.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "KeyTrain Connect uses your location to find nearby stations and send their arrivals to your TrainPod.";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
@@ -289,7 +289,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "mmmatiss.KeyTrainConnect";
+				PRODUCT_BUNDLE_IDENTIFIER = mmmatiss.KeyTrainConnect;
 				PRODUCT_MODULE_NAME = KeyTrainConnect;
 				PRODUCT_NAME = "KeyTrain Connect";
 				REGISTER_APP_GROUPS = YES;
@@ -313,7 +313,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = NO;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = D4C83367HD;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -322,10 +322,10 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Trainpod/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "KeyTrain Connect";
-				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Bluetooth is used to connect to the device and pull info.";
-				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Location is used to ensure the nearest stations are provided.";
-				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Location is needed to pull station info";
-				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "KeyTrain Connect uses Bluetooth to send nearby train arrivals to your TrainPod, including while your iPhone is locked.";
+				INFOPLIST_KEY_NSLocationAlwaysAndWhenInUseUsageDescription = "Allow Always location access so pressing your TrainPod button can find nearby stations and fetch arrivals while your iPhone is locked.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "KeyTrain Connect uses your location to find nearby stations and send their arrivals to your TrainPod.";
+				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = NO;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents[sdk=iphonesimulator*]" = YES;
@@ -340,7 +340,7 @@
 				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 26.5;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "mmmatiss.KeyTrainConnect";
+				PRODUCT_BUNDLE_IDENTIFIER = mmmatiss.KeyTrainConnect;
 				PRODUCT_MODULE_NAME = KeyTrainConnect;
 				PRODUCT_NAME = "KeyTrain Connect";
 				REGISTER_APP_GROUPS = YES;

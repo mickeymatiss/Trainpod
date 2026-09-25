@@ -72,7 +72,7 @@ final class BluetoothService: NSObject, ObservableObject {
 
     @Published private(set) var connectionState: ConnectionState = .disconnected
     @Published private(set) var connectedDeviceName: String?
-    // Application identity read from this connection; never used for routing or binding.
+    // Authoritative physical identity; verified before enabling transit traffic.
     @Published private(set) var connectedDeviceId: String?
     @Published private(set) var maximumWriteValueLength: Int?
     @Published private(set) var debugMessages: [String] = []
@@ -81,6 +81,9 @@ final class BluetoothService: NSObject, ObservableObject {
         didSet { rebuildDebugMessages() }
     }
 
+    var viewModeAcknowledgementHandler: ((Data) -> Void)?
+    var viewModeConnectionStateHandler: ((ConnectionState) -> Void)?
+    var viewModeReadyHandler: (() -> Void)?
     var uiColorAcknowledgementHandler: ((Data) -> Void)?
     var uiColorConnectionStateHandler: ((ConnectionState) -> Void)?
     var receivedDataHandler: ((Data) -> Void)?
@@ -118,6 +121,27 @@ final class BluetoothService: NSObject, ObservableObject {
     private var dataPathStarted = false
     private var retrieveAfterReset = false
     private var connectionRequestPending = false
+    private var rejectedCandidates: [UUID: Date] = [:]
+    private var identityVerificationTask: Task<Void, Never>?
+    private var bindingAllowsConnection: Bool {
+        configuration.deviceIdentityUUID == nil || TrainPodBindingStore.shared.bound != nil
+    }
+    private var identityVerified: Bool {
+        configuration.deviceIdentityUUID == nil ||
+        (connectedDeviceId != nil && connectedDeviceId == TrainPodBindingStore.shared.bound?.deviceId)
+    }
+    private func rejectUnregisteredPeripheral(_ candidate: CBPeripheral) {
+        guard peripheral === candidate else { return }
+        log("Candidate did not verify as the registered TrainPod")
+        rejectedCandidates[candidate.identifier] = Date().addingTimeInterval(15)
+        identityVerificationTask?.cancel()
+        central.cancelPeripheralConnection(candidate)
+        self.peripheral = nil; writableCharacteristic = nil; connectedDeviceId = nil
+        dataPathStarted = false; connectionRequestPending = false
+        defaults.removeObject(forKey: knownKey)
+        setConnectionState(.disconnected)
+        if autoScanEnabled && bindingAllowsConnection { startScanning(reason: "search for registered device identity") }
+    }
 
     init(configuration: BLEConfiguration, role: String, autoConnect: Bool = true, defaults: UserDefaults = .standard) {
         self.configuration = configuration
@@ -127,6 +151,9 @@ final class BluetoothService: NSObject, ObservableObject {
         super.init()
         autoScanEnabled = defaults.object(forKey: intentKey) as? Bool ?? autoConnect
         lifecycleDiagnostics = defaults.stringArray(forKey: diagnosticsKey) ?? []
+        if let hint = TrainPodBindingStore.shared.bound?.peripheralIdentifier {
+            defaults.set(hint.uuidString, forKey: knownKey)
+        }
         central = CBCentralManager(delegate: self, queue: nil,
                                    options: [CBCentralManagerOptionRestoreIdentifierKey: restorationID])
         NotificationCenter.default.addObserver(self, selector: #selector(reconnectTestArmed), name: BackgroundReconnectManager.armedNotification, object: nil)
@@ -140,7 +167,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     var canSend: Bool {
-        guard BackgroundReconnectManager.active == nil,
+        guard bindingAllowsConnection, identityVerified, BackgroundReconnectManager.active == nil,
               central.state == .poweredOn, peripheral?.state == .connected else { return false }
         if case .connected = connectionState, writableCharacteristic != nil {
             return true
@@ -153,7 +180,10 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     func scanAndConnect() {
-        guard BackgroundReconnectManager.active == nil else { return }
+        guard bindingAllowsConnection, BackgroundReconnectManager.active == nil else { return }
+        if peripheral == nil, let hint = TrainPodBindingStore.shared.bound?.peripheralIdentifier {
+            defaults.set(hint.uuidString, forKey: knownKey)
+        }
         autoScanEnabled = true
         defaults.set(true, forKey: intentKey)
         userRequestedDisconnect = false
@@ -161,7 +191,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func startScanning(reason: String) {
-        guard BackgroundReconnectManager.active == nil else { return }
+        guard bindingAllowsConnection, BackgroundReconnectManager.active == nil else { return }
         guard central.state == .poweredOn else {
             setConnectionState(.error("Bluetooth is not ready."))
             log("Scan blocked: central state is \(central.state.debugName), reason: \(reason)")
@@ -231,7 +261,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     func armBackgroundReconnectTest() {
-        guard let peripheral, connectionState == .connected, !writeInProgress else { return }
+        guard let peripheral, canSend, !writeInProgress else { return }
         backgroundReconnect.arm(central: central, peripheral: peripheral)
         objectWillChange.send()
     }
@@ -270,11 +300,11 @@ final class BluetoothService: NSObject, ObservableObject {
     private func retainKnown(_ peripheral: CBPeripheral) {
         self.peripheral = peripheral
         peripheral.delegate = self
-        defaults.set(peripheral.identifier.uuidString, forKey: knownKey)
+        if identityVerified { defaults.set(peripheral.identifier.uuidString, forKey: knownKey) }
     }
 
     private func requestConnection(_ peripheral: CBPeripheral, reason: String) {
-        guard autoScanEnabled, central.state == .poweredOn else { return }
+        guard bindingAllowsConnection, autoScanEnabled, central.state == .poweredOn else { return }
         retainKnown(peripheral)
         stopScanning(reason: "known peripheral")
         setConnectionState(.connecting)
@@ -293,7 +323,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func resumeKnownConnection(reason: String) {
-        guard autoScanEnabled, !userRequestedDisconnect,
+        guard bindingAllowsConnection, autoScanEnabled, !userRequestedDisconnect,
               BackgroundReconnectManager.active == nil, central.state == .poweredOn else { return }
         if retrieveAfterReset {
             // CoreBluetooth invalidates peripheral objects on a central reset; retrieve the saved ID.
@@ -322,7 +352,15 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func resumeDataPath(_ peripheral: CBPeripheral) {
-        guard !dataPathStarted else { return }
+        guard bindingAllowsConnection, !dataPathStarted else { return }
+        connectedDeviceId = nil; writableCharacteristic = nil
+        identityVerificationTask?.cancel()
+        identityVerificationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 8_000_000_000)
+            guard !Task.isCancelled, let self, self.peripheral === peripheral,
+                  !self.identityVerified else { return }
+            self.rejectUnregisteredPeripheral(peripheral)
+        }
         dataPathStarted = true
         retainKnown(peripheral)
         if let characteristic = peripheral.services?
@@ -346,13 +384,21 @@ final class BluetoothService: NSObject, ObservableObject {
     private func readDeviceIdentity(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
         guard characteristic.properties.contains(.read) else {
             log("Device identity characteristic is not readable")
+            rejectUnregisteredPeripheral(peripheral)
             return
+        }
+        identityVerificationTask?.cancel()
+        identityVerificationTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled, let self, self.peripheral === peripheral,
+                  !self.identityVerified else { return }
+            self.rejectUnregisteredPeripheral(peripheral)
         }
         peripheral.readValue(for: characteristic)
     }
 
     private func configureCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
-        guard self.peripheral === peripheral, peripheral.state == .connected,
+        guard bindingAllowsConnection, identityVerified, self.peripheral === peripheral, peripheral.state == .connected,
               central.state == .poweredOn,
               characteristic.uuid == configuration.characteristicUUID,
               characteristic.service?.uuid == configuration.serviceUUID else { return }
@@ -473,13 +519,15 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func setConnectionState(_ state: ConnectionState) {
+        if state == .connected && (!bindingAllowsConnection || !identityVerified) { return }
         connectionState = state
         log("State: \(state.title) - \(state.message(configuration: configuration))")
         connectionStateHandler?(state)
         uiColorConnectionStateHandler?(state)
-        if state == .connected && BackgroundReconnectManager.active == nil {
+        viewModeConnectionStateHandler?(state)
+        if state == .connected && identityVerified && bindingAllowsConnection && BackgroundReconnectManager.active == nil {
             if configuration.supportsDiagnosticsTimeSync && role == "transit" && !clockSyncStarted { sendClockSync() }
-            else if !clockSyncInProgress { readyHandler?() }
+            else if !clockSyncInProgress { readyHandler?(); viewModeReadyHandler?() }
         }
     }
 
@@ -493,7 +541,7 @@ final class BluetoothService: NSObject, ObservableObject {
             defer {
                 if self.diagnosticSessionId == session {
                     self.clockSyncInProgress = false
-                    if self.notificationsReady { self.readyHandler?() }
+                    if self.notificationsReady { self.readyHandler?(); self.viewModeReadyHandler?() }
                 }
             }
             do {
@@ -636,7 +684,7 @@ extension BluetoothService: CBCentralManagerDelegate {
                 diagnostic("restored scan; discovery remains filtered by expected service UUID")
             }
             if central.state == .poweredOn {
-                if autoScanEnabled { resumeKnownConnection(reason: "restored state") }
+                if autoScanEnabled && bindingAllowsConnection { resumeKnownConnection(reason: "restored state") }
                 else {
                     stopScanning(reason: "restored manual disconnect intent")
                     if let peripheral {
@@ -657,7 +705,7 @@ extension BluetoothService: CBCentralManagerDelegate {
                 if case .error = connectionState {
                     setConnectionState(.disconnected)
                 }
-                if autoScanEnabled {
+                if autoScanEnabled && bindingAllowsConnection {
                     resumeKnownConnection(reason: "central poweredOn")
                 } else {
                     stopScanning(reason: "persisted manual disconnect intent")
@@ -703,7 +751,8 @@ extension BluetoothService: CBCentralManagerDelegate {
     ) {
         Task { @MainActor in
             let peripheralName = peripheral.name
-            guard autoScanEnabled, central.isScanning, self.peripheral == nil,
+            guard bindingAllowsConnection, autoScanEnabled, central.isScanning, self.peripheral == nil,
+                  (rejectedCandidates[peripheral.identifier] ?? .distantPast) < Date(),
                   BackgroundReconnectManager.active == nil else { return }
             let advertisedName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
             let classification = self.debugClassification(
@@ -767,7 +816,9 @@ extension BluetoothService: CBCentralManagerDelegate {
             return BackgroundReconnectManager.active != nil
         }) { return }
         MainActor.assumeIsolated {
-            guard autoScanEnabled, self.peripheral?.identifier == peripheral.identifier else { return }
+            guard bindingAllowsConnection, autoScanEnabled, self.peripheral?.identifier == peripheral.identifier else {
+                central.cancelPeripheralConnection(peripheral); return
+            }
             diagnostic("connected id=\(peripheral.identifier) backgrounded=\(UIApplication.shared.applicationState == .background)")
             resumeDataPath(peripheral)
         }
@@ -867,7 +918,7 @@ extension BluetoothService: CBPeripheralDelegate {
                   BackgroundReconnectManager.active == nil else { return }
             if let error {
                 log("Service discovery failed: \(error.localizedDescription)")
-                setConnectionState(.error(error.localizedDescription))
+                rejectUnregisteredPeripheral(peripheral)
                 return
             }
 
@@ -882,7 +933,7 @@ extension BluetoothService: CBPeripheralDelegate {
             }
 
             guard let service = peripheral.services?.first(where: { $0.uuid == configuration.serviceUUID }) else {
-                setConnectionState(.error("\(configuration.deviceName) service was not found."))
+                rejectUnregisteredPeripheral(peripheral)
                 return
             }
 
@@ -901,7 +952,7 @@ extension BluetoothService: CBPeripheralDelegate {
                   BackgroundReconnectManager.active == nil else { return }
             if let error {
                 log("Characteristic discovery failed: \(error.localizedDescription)")
-                setConnectionState(.error(error.localizedDescription))
+                rejectUnregisteredPeripheral(peripheral)
                 return
             }
 
@@ -915,12 +966,14 @@ extension BluetoothService: CBPeripheralDelegate {
                 if let identity = service.characteristics?.first(where: { $0.uuid == uuid }) {
                     readDeviceIdentity(identity, on: peripheral)
                 } else {
-                    log("Device identity unavailable (older firmware)")
+                    log("Device identity unavailable; cannot verify registered TrainPod")
+                    rejectUnregisteredPeripheral(peripheral)
+                    return
                 }
             }
 
             guard let characteristic = service.characteristics?.first(where: { $0.uuid == configuration.characteristicUUID }) else {
-                setConnectionState(.error("\(configuration.deviceName) write characteristic was not found."))
+                rejectUnregisteredPeripheral(peripheral)
                 return
             }
 
@@ -939,19 +992,29 @@ extension BluetoothService: CBPeripheralDelegate {
                   characteristic.service?.uuid == configuration.serviceUUID else { return false }
             if let error {
                 log("Device identity read failed: \(error.localizedDescription)")
+                rejectUnregisteredPeripheral(peripheral)
                 return true
             }
             guard let received, let id = String(data: received, encoding: .utf8),
                   id.range(of: "^TP-(?:[0-9A-F]{8}|[0-9A-F]{32})$", options: .regularExpression) != nil else {
                 log("Device identity read returned an invalid value")
+                rejectUnregisteredPeripheral(peripheral)
                 return true
             }
+            guard id == TrainPodBindingStore.shared.bound?.deviceId else {
+                rejectUnregisteredPeripheral(peripheral); return true
+            }
+            identityVerificationTask?.cancel()
             connectedDeviceId = id
+            retainKnown(peripheral)
             FileLogger.shared.log("[BLE] Connected TrainPod ID: \(id)")
+            if let transfer = characteristic.service?.characteristics?.first(where: { $0.uuid == configuration.characteristicUUID }) {
+                configureCharacteristic(transfer, on: peripheral)
+            }
             return true
         }) { return }
         if MainActor.assumeIsolated({
-            guard peripheral === self.peripheral, characteristic === writableCharacteristic,
+            guard bindingAllowsConnection, identityVerified, peripheral === self.peripheral, characteristic === writableCharacteristic,
                   error == nil,
                   received.map({ configuration.controlMessages.contains($0) || PayloadDelivery.request($0) != nil }) == true else { return false }
             // Control messages are not ACKs or test frames. Consume in both service instances;
@@ -984,7 +1047,9 @@ extension BluetoothService: CBPeripheralDelegate {
                 return
             }
 
-            if data.starts(with: Data("UA:".utf8)) || data.starts(with: Data("TA:".utf8)) {
+            if data.starts(with: Data("VA:".utf8)) {
+                viewModeAcknowledgementHandler?(data)
+            } else if data.starts(with: Data("UA:".utf8)) || data.starts(with: Data("TA:".utf8)) {
                 uiColorAcknowledgementHandler?(data)
             } else if let (transaction, status, bytes) = PayloadDelivery.acknowledgement(data) {
                 dataAppliedHandler?(transaction, status, bytes)

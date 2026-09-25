@@ -1,5 +1,32 @@
 # Changelog
 
+## Firmware reliability — working changes
+
+- Move TFT initialization, setup screens and drawing into one independent renderer task.
+- Keep authoritative transit state, navigation and timers on the application loop; publish latest-state snapshots without waiting for TFT.
+- Use one bounded update pipeline for startup, refresh and retry with independent update/render timing and stall diagnostics.
+- Pin CPU frequency while rendering is enabled to avoid SPI/APB lock coupling.
+- Add optional serial render fault controls; source review only, no builds/tests/flashing.
+
+See `docs/FIRMWARE-RELIABILITY.md` for ownership, audit findings and driver limitations.
+
+## Device registration V1 — working changes
+
+- Add independent firmware provisioning state and a physical-button setup window.
+- Keep unprovisioned BLE advertising enabled from boot, independently of button
+  readiness, inactivity, display and normal session timers; re-arm after disconnect.
+- Add setup status/command/result characteristics beside the unchanged identity
+  and transit characteristics. Persist one complete binding atomically in NVS.
+- Gate iOS startup with a single setup card. Store installation identity and
+  pending/bound credentials atomically in Keychain before claiming.
+- Recover interrupted claims using the same pending credentials and permanent ID;
+  reject subsequent initial claims and retain ownership on failed attempts.
+- Verify registered device identity before enabling normal transit/clock traffic.
+- Provide explicit local reset APIs that preserve permanent firmware identity.
+- Source review only; no builds, tests or flashing, per user preference.
+
+See `docs/SETUP-BINDING.md` for protocol, lifecycle and manual acceptance details.
+
 ## Selected for integration — 2026-09-14
 
 Selection: retain B01–B07 and A01–A16 plus A18. Exclude A17.

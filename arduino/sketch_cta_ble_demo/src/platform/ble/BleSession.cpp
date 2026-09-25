@@ -1,5 +1,6 @@
 #include "../diagnostics/SerialLog.h"
 #include "BleSession.h"
+#include "../setup/DeviceProvisioning.h"
 #include "../device/DeviceIdentity.h"
 #include "../power/NightBrightness.h"
 #include "../diagnostics/DiagnosticExport.h"
@@ -89,6 +90,10 @@ void BleSession::beginSession() {
     return;
   }
   characteristic_->setCallbacks(&characteristicCallbacks_);
+  if(!DeviceProvisioning::shared().attach(service)) {
+    WarnLog.println("[SETUP] BLE setup interface unavailable");shutdownStack();return;
+  }
+  setupLifecycle_=DeviceProvisioning::shared().keepsBleAvailable();
   auto* identityCharacteristic = service->createCharacteristic(
       DeviceIdentity::characteristicUUID, NIMBLE_PROPERTY::READ, 35);
   if (!identityCharacteristic) {
@@ -119,7 +124,7 @@ void BleSession::beginSession() {
 }
 
 void BleSession::markTransactionComplete() {
-  if (permissive() || manualWindow_) return;
+  if (DeviceProvisioning::shared().keepsBleAvailable() || permissive() || manualWindow_) return;
   const auto state = state_.load();
   if (state != BleSessionState::Connected && state != BleSessionState::Transferring) return;
   completionStartedMs_ = millis();
@@ -128,7 +133,7 @@ void BleSession::markTransactionComplete() {
 }
 
 void BleSession::abortSession(const char* reason) {
-  if (permissive() || manualWindow_) return;
+  if (DeviceProvisioning::shared().keepsBleAvailable() || permissive() || manualWindow_) return;
   if (!isActive() || state_.load() == BleSessionState::Stopping) return;
   if (reason && *reason) DebugLog.printf("[BLE] %s\n", reason);
   DebugLog.println("[BLE] session aborted");
@@ -136,7 +141,7 @@ void BleSession::abortSession(const char* reason) {
 }
 
 void BleSession::endSession() {
-  if (permissive() || manualWindow_) return;
+  if (DeviceProvisioning::shared().keepsBleAvailable() || permissive() || manualWindow_) return;
   if (state_.load() == BleSessionState::Off || state_.load() == BleSessionState::Stopping) return;
   if (diagnosticsActive()) { closePending_ = true; return; }
   const uint32_t now = millis();
@@ -161,6 +166,34 @@ void BleSession::endSession() {
 }
 
 void BleSession::update() {
+  auto& setup=DeviceProvisioning::shared();
+  setup.update();
+  if(setup.keepsBleAvailable()) {
+    if(!setupLifecycle_)setupRetryMs_=millis();
+    setupLifecycle_=true;
+    // Setup owns radio availability, independently of screen/refresh lifecycle.
+    closePending_=false;
+    if(state_==BleSessionState::Off && int32_t(millis()-setupRetryMs_)>=0) {
+      setupRetryMs_=millis()+1000;beginSession();
+    } else if(state_==BleSessionState::Stopping) {
+      if(peer_==BLE_HS_CONN_HANDLE_NONE || disconnected_.exchange(false) ||
+         uint32_t(millis()-stoppingStartedMs_)>=DISCONNECT_TIMEOUT_MS)shutdownStack();
+    } else if(state_!=BleSessionState::Off && state_!=BleSessionState::Starting) {
+      // Duration zero has no advertising timeout. Re-arm after link events.
+      auto* advertising=NimBLEDevice::getAdvertising();
+      if(!isConnected() && !advertising->isAdvertising() && int32_t(millis()-setupRetryMs_)>=0) {
+        setupRetryMs_=millis()+1000;advertising->start(0);
+      }
+    }
+    return;
+  }
+  if(setupLifecycle_) {
+    setupLifecycle_=false;
+    // Allow completion ACK recovery before resuming normal power savings.
+    manualWindow_=true;manualWindowStartedMs_=millis();manualRetryMs_=millis();
+    sessionStartedMs_=millis();
+    if(isConnected())NimBLEDevice::stopAdvertising();
+  }
   const uint32_t windowNow = millis();
   if (manualWindow_ && uint32_t(windowNow - manualWindowStartedMs_) >= MANUAL_WINDOW_MS) {
     manualWindow_ = false;
@@ -173,6 +206,12 @@ void BleSession::update() {
       int32_t(windowNow - manualRetryMs_) >= 0) {
     manualRetryMs_ = windowNow + 1000;
     beginSession();
+  }
+  if(permissive() && state_.load()==BleSessionState::Advertising && !isConnected() &&
+      int32_t(windowNow-availabilityRetryMs_)>=0) {
+    availabilityRetryMs_=windowNow+1000;
+    auto* advertising=NimBLEDevice::getAdvertising();
+    if(!advertising->isAdvertising()) advertising->start(0);
   }
   DiagnosticExport::shared().update(*this);
   const auto state = state_.load();
@@ -197,7 +236,7 @@ void BleSession::update() {
     return;
   }
 
-  if (permissive() || manualWindow_) return;
+  if (DeviceProvisioning::shared().keepsBleAvailable() || permissive() || manualWindow_) return;
   if (uint32_t(now - sessionStartedMs_) >= SESSION_TIMEOUT_MS) {
     DiagnosticStore::shared().count(DiagnosticCounter::BleTimeout);
     DiagnosticStore::shared().event(EventCode::BLE_TIMEOUT,LogLevel::Warn);
@@ -227,6 +266,7 @@ void BleSession::setPermissive(bool enabled) {
 void BleSession::shutdownStack() {
   NimBLEDevice::stopAdvertising();
   // Runtime shutdown only: deinit never clears bonds, keys, identity, or peer data.
+  DeviceProvisioning::shared().detached();
   NimBLEDevice::deinit(true);
   server_ = nullptr;
   characteristic_ = nullptr;
@@ -243,11 +283,14 @@ void BleSession::shutdownStack() {
 void BleSession::handleConnect(NimBLEServer* server, NimBLEConnInfo& info) {
   const auto state = state_.load();
   if (state != BleSessionState::Advertising || peer_.load() != BLE_HS_CONN_HANDLE_NONE ||
-      !observer_.onBleConnected(server, info)) {
+      (DeviceProvisioning::shared().provisioned() && !observer_.onBleConnected(server, info))) {
     server->disconnect(info.getConnHandle());
+    if(DeviceProvisioning::shared().keepsBleAvailable())NimBLEDevice::getAdvertising()->start(0);
     return;
   }
   peer_ = info.getConnHandle();
+  setupConnection_=!DeviceProvisioning::shared().provisioned();
+  DeviceProvisioning::shared().connected(info.getConnHandle());
   subscribed_ = false;
   connectedAtMs_ = millis();
   closePending_ = false;
@@ -256,6 +299,7 @@ void BleSession::handleConnect(NimBLEServer* server, NimBLEConnInfo& info) {
   DiagnosticStore::shared().event(EventCode::BLE_ADVERTISING_STOP);
   InfoLog.println("BLE connected");
   DiagnosticStore::shared().event(EventCode::BLE_CONNECTED,LogLevel::Info);
+  if(DeviceProvisioning::shared().keepsBleAvailable())NimBLEDevice::getAdvertising()->start(0);
 }
 
 void BleSession::handleDisconnect(NimBLEConnInfo& info, int reason) {
@@ -263,11 +307,20 @@ void BleSession::handleDisconnect(NimBLEConnInfo& info, int reason) {
   DiagnosticExport::shared().disconnected();
   DiagnosticStore::shared().count(DiagnosticCounter::BleDisconnect);
   DiagnosticStore::shared().event(EventCode::BLE_DISCONNECTED,state_.load() == BleSessionState::Stopping ? LogLevel::Info : LogLevel::Warn,reason);
-  observer_.onBleDisconnected(info, reason);
+  DeviceProvisioning::shared().disconnected();
+  if(!setupConnection_)observer_.onBleDisconnected(info, reason);
+  setupConnection_=false;
   peer_ = BLE_HS_CONN_HANDLE_NONE;
   subscribed_ = false;
   disconnected_ = true;
   closePending_ = false;
+  if(DeviceProvisioning::shared().keepsBleAvailable() || permissive()) {
+    // Keep the initialized radio available; a phone disconnect is not a request
+    // to enter the ordinary teardown/reconnect lifecycle in always-on mode.
+    state_=BleSessionState::Advertising;disconnected_=false;
+    NimBLEDevice::getAdvertising()->start(0);
+    return;
+  }
   if (state_.load() != BleSessionState::Stopping) {
     WarnLog.println("[BLE] unexpected disconnect");
     state_ = BleSessionState::Stopping;
@@ -276,7 +329,7 @@ void BleSession::handleDisconnect(NimBLEConnInfo& info, int reason) {
 }
 
 void BleSession::handleWrite(NimBLECharacteristic* characteristic, NimBLEConnInfo& info) {
-  if (info.getConnHandle() != peer_.load()) return;
+  if (info.getConnHandle() != peer_.load() || setupConnection_ || !DeviceProvisioning::shared().provisioned()) return;
   if (state_.load() == BleSessionState::Stopping) return;
   const auto bytes = characteristic->getValue();
   if ((bytes.size() == 14 && bytes[0] == 'T' && bytes[1] == '1') ||
@@ -307,6 +360,7 @@ void BleSession::handleWrite(NimBLECharacteristic* characteristic, NimBLEConnInf
 void BleSession::handleSubscribe(NimBLECharacteristic* characteristic, NimBLEConnInfo& info,
                                  uint16_t value) {
   if (info.getConnHandle() != peer_.load()) return;
+  if(setupConnection_ || !DeviceProvisioning::shared().provisioned())return;
   subscribed_ = (value & 1) != 0;
   observer_.onBleSubscribe(characteristic, info, value);
 }

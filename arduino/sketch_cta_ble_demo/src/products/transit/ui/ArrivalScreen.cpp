@@ -1,13 +1,8 @@
 #include "../../../platform/diagnostics/SerialLog.h"
 #include "ArrivalScreen.h"
 #include <cstdlib>
+#include <new>
 #include "theme/pallete.h"
-#ifndef TRAINPOD_RENDER_TEST
-#include "../../../platform/diagnostics/DiagnosticStore.h"
-#include "../../../platform/metrics/MetricsStore.h"
-#include <esp_timer.h>
-#include "../../../platform/power/PerformanceMode.h"
-#endif
 #include "fonts/DepartureMono11.h"
 #include "fonts/BarlowCondensedRegular12.h"
 #include "fonts/BarlowCondensedRegular16.h"
@@ -22,9 +17,20 @@
 #include "fonts/ArrivalItalic18.h"
 #include "fonts/ArrivalItalic12.h"
 #include "fonts/ArrivalItalic9.h"
+#include <cctype>
 
 namespace {
 uint16_t etaColor(uint8_t opacity) { return pallete::arrivalBadgeText(opacity); }
+std::string displayDirection(const std::string& value) {
+  std::string lower=value;
+  for(char& c:lower) c=char(std::tolower(static_cast<unsigned char>(c)));
+  if(lower.find("east")!=std::string::npos) return "East";
+  if(lower.find("west")!=std::string::npos) return "West";
+  if(lower.find("south")!=std::string::npos) return "South";
+  if(lower.find("north")!=std::string::npos) return "North";
+  constexpr const char* prefix="Platform ";
+  return value.rfind(prefix,0)==0 ? value.substr(9) : value;
+}
 std::string routeAbbreviation(const std::string& label) {
   if (label == "Green" || label == "GRN") return "GRN";
   if (label == "Blue" || label == "BLU") return "BLU";
@@ -40,7 +46,34 @@ std::string routeAbbreviation(const std::string& label) {
 
 }
 
-void ArrivalScreen::begin(uint32_t now) { state.clockAdvanced = now; connectionAttemptStarted = now; draw(now); }
+void ArrivalScreen::invalidate() {
+  platformDip.cancel();
+  hasRendered=false;
+  etaRimValid.fill(false);
+  dirty=themeDirty=true;
+}
+void ArrivalScreen::applySnapshot(const RenderSnapshot& snapshot,uint32_t now) {
+  renderError=nullptr;
+  const bool changedStyle=styleRevision!=snapshot.styleRevision || state.compact!=snapshot.board.compact;
+  const bool changedSelection=state.platform!=snapshot.board.platform || state.page!=snapshot.board.page;
+  if(changedSelection && !changedStyle) beginNavigationTransition(now);
+  state=snapshot.board; // Read-only application snapshot; no renderer pagination.
+  platformDip.arrivalSlots=visibleSlots();
+  pallete::setRenderTheme(snapshot.theme);
+  styleRevision=snapshot.styleRevision;
+  if(changedStyle || !hasRendered) invalidate();
+  setConnected(snapshot.connected);
+  setBatteryPercent(snapshot.batteryPercent);
+  suspended=snapshot.suspended;
+  if(springPhysicalHeld!=snapshot.buttonDown) buttonChanged(snapshot.buttonDown,now);
+  dirty=true;
+}
+bool ArrivalScreen::pending() const {
+  if(suspended) return false;
+  if(dirty || themeDirty || platformDip.active || springBlock.moving()) return true;
+  for(const auto& fade:etaFades) if(fade.active) return true;
+  return false;
+}
 std::string ArrivalScreen::footerKey(uint32_t now) const {
   return footerStatusKey(now)+":"+state.current().distanceValue+":"+state.current().distanceUnit;
 }
@@ -50,31 +83,23 @@ std::string ArrivalScreen::footerStatusKey(uint32_t now) const {
     std::to_string(int(battery))+":"+std::to_string(age);
 }
 
-void ArrivalScreen::requestNavigation(bool station,uint32_t now) {
-  if(!state.hasData || suspended) return;
-  ArrivalScreenState selection=state;
-  if(station) selection.nextStation(now); else selection.nextPlatform(now);
-  if(selection.platform==state.platform && selection.page==state.page) return;
-  beginNavigationTransition(now);
-  state.platform=selection.platform;state.page=selection.page;state.pageStarted=now;
-  dirty=true;
-}
-
 void ArrivalScreen::beginNavigationTransition(uint32_t now) {
   if(!hasRendered || !navigationCanvas) return;
   transitionPaintedOpacity.fill(-1);
-  for(size_t group=0;group<5;++group) {
+  transitionPaintedLights=transitionPaintedNames=transitionPaintedDestinations=-1;
+  for(size_t group=0;group<visibleSlots()+2;++group) {
     if(!platformDip.active || platformDip.groups[group].opacity==255) transitionFields[group]=0;
     transitionSource[group]=platformDip.active ? transitionShown[group] : renderedPlatform;
     transitionSourcePage[group]=platformDip.active ? transitionShownPage[group] : renderedPage;
-    if(!platformDip.active && group>=1 && group<=3) {
-      const size_t slot=group-1,index=renderedPage*3+slot;
+    if(!platformDip.active && group>=1 && group<=visibleSlots()) {
+      const size_t slot=group-1,index=renderedPage*visibleSlots()+slot;
       if(index<transitionSource[group].arrivalCount)
         transitionSource[group].arrivals[index].eta=etaFades[slot].value;
     }
     transitionShown[group]=transitionSource[group];
     transitionShownPage[group]=transitionSourcePage[group];
   }
+  platformDip.arrivalSlots=visibleSlots();
   if(platformDip.active) platformDip.retarget(now); else platformDip.begin(now);
 }
 
@@ -89,10 +114,14 @@ void ArrivalScreen::copyRegion(int x,int y,int width,int height) {
 
 void ArrivalScreen::renderPlatformFrame(uint32_t now) {
   drawingTarget=navigationCanvas.get();
-  const int width=gfx.width(),rowHeight=(gfx.height()-52)/3;
+  const int width=gfx.width();
   auto* pixels=navigationCanvas->getFramebuffer();
   const ArrivalDisplay empty{"",0,"",-1};
-  for(size_t group=0;group<5;++group) {
+  const int lightState=int(platformDip.lightOpacity)+(platformDip.lightReady ? 256 : 0);
+  const bool lightsChanged=transitionPaintedLights!=lightState;
+  const bool contentChanged=lightsChanged || transitionPaintedNames!=platformDip.nameOpacity ||
+    transitionPaintedDestinations!=platformDip.destinationOpacity;
+  for(size_t group=0;group<visibleSlots()+2;++group) {
     const auto& phase=platformDip.groups[group];
     const auto& source=transitionSource[group];
     const auto& target=state.current();
@@ -102,10 +131,10 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
     if(group==0) {
       if(source.stationName!=target.stationName) fields|=1;
       if(source.direction!=target.direction) fields|=2;
-    } else if(group==4) {
+    } else if(group==footerGroup()) {
       if(source.distanceValue!=target.distanceValue || source.distanceUnit!=target.distanceUnit) fields|=1;
     } else {
-      const size_t slot=group-1,oldIndex=transitionSourcePage[group]*3+slot,newIndex=state.page*3+slot;
+      const size_t slot=group-1,oldIndex=transitionSourcePage[group]*visibleSlots()+slot,newIndex=state.page*visibleSlots()+slot;
       const auto& a=oldIndex<source.arrivalCount ? source.arrivals[oldIndex] : empty;
       const auto& b=newIndex<target.arrivalCount ? target.arrivals[newIndex] : empty;
       if(a.eta!=b.eta) fields|=1;
@@ -113,52 +142,56 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
           (!a.routeLabel.empty() && !b.routeLabel.empty() && a.routeColor!=b.routeColor)) fields|=2;
       if(routeAbbreviation(a.routeLabel)!=routeAbbreviation(b.routeLabel)) fields|=4;
       if(a.destination!=b.destination) fields|=8;
+      fields|=15; // New screens cycle all arrival fields on shared, non-staggered clocks.
     }
     if(!fields || (transitionPaintedOpacity[group]==phase.opacity &&
-        transitionPaintedIncoming[group]==phase.incoming)) continue;
+        transitionPaintedIncoming[group]==phase.incoming &&
+        (!(group>=1 && group<=visibleSlots()) || !contentChanged))) continue;
     const auto& platform=phase.incoming ? target : source;
     const size_t page=phase.incoming ? state.page : transitionSourcePage[group];
-    const int x=group==4 ? (width-87)/2 : 8;
-    const int y=group==0 ? 1 : group==4 ? gfx.height()-22 : 37+int(group-1)*rowHeight;
-    const int w=group==4 ? 87 : width-16;
-    const int h=group==0 ? 29 : group==4 ? 22 : 32;
+    const int x=group==footerGroup() ? (width-87)/2 : group==0 ? 8 : cellX(group-1);
+    const int y=group==0 ? 1 : group==footerGroup() ? gfx.height()-22 : cellY(group-1);
+    const int w=group==footerGroup() ? 87 : group==0 ? width-16 : cellRight(group-1)-x;
+    const int h=group==0 ? 29 : group==footerGroup() ? 22 : 32;
     surface().fillRect(x,y,w,h,pallete::background()); // scratch RAM only
-    if(group>=1 && group<=3) {
+    if(group>=1 && group<=visibleSlots()) {
       drawRowShell(group-1);
-      if(fields&4) for(int dot : {116,121,126})
-        surface().fillCircle(dot,y+18,1,pallete::secondaryText());
+      // Dark route windows and hidden labels have no placeholder dots.
     }
-    if(group==4) drawDistanceGauge("","");
+    if(group==footerGroup()) drawDistanceGauge("","");
     for(int row=0;row<h;++row)
       std::copy_n(pixels+(y+row)*width+x,w,transitionShell.data()+row*w);
     if(group==0) {
-      if(fields&2) text(platform.direction,width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
+      if(fields&2) text(displayDirection(platform.direction),width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
       if(fields&1) text(platform.stationName,18,23,width-129,pallete::primaryText(),1,false,&BarlowCondensedSemiBold28);
-    } else if(group==4) {
+    } else if(group==footerGroup()) {
       drawDistanceGauge(platform.distanceValue,platform.distanceUnit);
     } else {
-      const size_t slot=group-1,index=page*3+slot;
+      const size_t slot=group-1,index=page*visibleSlots()+slot;
       const auto& arrival=index<platform.arrivalCount ? platform.arrivals[index] : empty;
-      const int baseline=60+int(slot)*rowHeight;
+      const int baseline=cellY(slot)+23;
       if(fields&1) drawEta(slot,arrival.eta,255,false);
-      if(fields&2) drawLineWindow(slot,index<platform.arrivalCount ? &arrival : nullptr);
-      if((fields&4) && !arrival.routeLabel.empty()) {
-        surface().fillRect(102,y,63,32,pallete::background());
-        text(routeAbbreviation(arrival.routeLabel),102,baseline+2,60,pallete::primaryText(),1,false,&BarlowCondensedSemiBold22);
+      // Route lights use the next page and a shared clock, not this row's text phase.
+      const size_t incomingIndex=state.page*visibleSlots()+slot;
+      const auto& incoming=incomingIndex<target.arrivalCount ? target.arrivals[incomingIndex] : empty;
+      if(fields&2) drawLineWindow(slot,incomingIndex<target.arrivalCount ? &incoming : nullptr);
+      if((fields&4) && !incoming.routeLabel.empty()) {
+        surface().fillRect(nameX(slot),y,nameRegionWidth(slot),32,pallete::background());
+        text(routeAbbreviation(incoming.routeLabel),nameX(slot),baseline+2,nameWidth(slot),pallete::primaryText(),1,false,&BarlowCondensedSemiBold22);
       }
-      if(fields&8) text(arrival.destination,181,baseline+1,width-189,pallete::secondaryText(),1,true,&BarlowCondensedRegular23);
+      if(!state.compact && (fields&8)) text(arrival.destination,181,baseline+1,width-189,pallete::secondaryText(),1,true,&BarlowCondensedRegular23);
     }
     const auto dynamicPixel=[&](int px,int py) {
       if(group==0) return ((fields&1) && px>=18 && px<209) || ((fields&2) && px>=width-103 && px<width-18);
-      if(group==4) return GaugeBezel::inside(px-x,py-y,87,28,6) &&
+      if(group==footerGroup()) return GaugeBezel::inside(px-x,py-y,87,28,6) &&
         !(bezel.distance && bezel.rim(px-x,py-y,87,28,6,(uint32_t(x)<<16)|uint32_t(y)));
       const int slot=int(group)-1;
-      if((fields&1) && px>=10 && px<60 && py>=y+2 && py<y+30)
-        return !etaRimMask[slot][(py-y)*54+px-8];
-      if((fields&2) && GaugeBezel::inside(px-72,py-y-5,22,22,4))
-        return !(bezel.route && bezel.rim(px-72,py-y-5,22,22,4,(72u<<16)|uint32_t(y+5)));
-      if((fields&4) && px>=102 && px<165) return true;
-      return (fields&8) && px>=181 && px<width-8;
+      if((fields&1) && px>=cellX(slot)+2 && px<cellX(slot)+52 && py>=y+2 && py<y+30)
+        return !etaRimMask[slot][(py-y)*54+px-cellX(slot)];
+      if((fields&2) && GaugeBezel::inside(px-lineX(slot),py-y-5,22,22,4))
+        return !(bezel.route && bezel.rim(px-lineX(slot),py-y-5,22,22,4,(uint32_t(lineX(slot))<<16)|uint32_t(y+5)));
+      if((fields&4) && px>=nameX(slot) && px<nameX(slot)+nameRegionWidth(slot)) return true;
+      return !state.compact && (fields&8) && px>=181 && px<width-8;
     };
     // Transfer only changed field interiors, excluding every static rim.
     for(int row=0;row<h;++row) {
@@ -167,7 +200,16 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
       for(int col=0;col<=w;++col) {
         const bool paint=col<w && dynamicPixel(x+col,y+row);
         if(paint) {
-          line[col]=DisplayEffects::fade565(line[col],transitionShell[row*w+col],phase.opacity);
+          uint8_t opacity=phase.opacity;
+          if(group>=1 && group<=visibleSlots()) {
+            const size_t slot=group-1;
+            const int px=x+col;
+            if(px>=lineX(slot) && px<lineX(slot)+22) opacity=platformDip.lightOpacity;
+            else if(px>=nameX(slot) && px<nameX(slot)+nameRegionWidth(slot)) opacity=platformDip.nameOpacity;
+            else if(!state.compact && px>=181) opacity=platformDip.destinationOpacity;
+            else if(px>=cellX(slot)+2 && px<cellX(slot)+52) opacity=platformDip.numberOpacity;
+          }
+          line[col]=DisplayEffects::fade565(line[col],transitionShell[row*w+col],opacity);
           if(run<0) run=col;
         } else if(run>=0) {
           gfx.draw16bitRGBBitmap(x+run,y+row,line+run,col-run,1);
@@ -180,30 +222,25 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
     transitionPaintedOpacity[group]=phase.opacity;
     transitionPaintedIncoming[group]=phase.incoming;
   }
+  transitionPaintedLights=lightState;
+  transitionPaintedNames=platformDip.nameOpacity;
+  transitionPaintedDestinations=platformDip.destinationOpacity;
   drawingTarget=nullptr;
 }
 
 void ArrivalScreen::animatePlatform(uint32_t now) {
-  if(!setPerformanceMode(PerformanceMode::ACTIVE) || !platformDip.tick(now)) return;
+  if(!platformDip.tick(now)) return;
   renderPlatformFrame(now);
   if(!platformDip.active) {
     renderedPlatform=state.current();renderedPage=state.page;hasRendered=true;
-    for(size_t slot=0;slot<3;++slot) {
-      const size_t index=state.page*3+slot;
+    for(size_t slot=0;slot<visibleSlots();++slot) {
+      const size_t index=state.page*visibleSlots()+slot;
       etaFades[slot].reset(index<state.current().arrivalCount ? state.current().arrivals[index].eta : -1);
     }
     // Preserve status identity: changing platforms alone does not repaint it.
     dirty=true;
   }
 }
-void ArrivalScreen::setPlatforms(const ArrivalBoard& data, uint32_t now) {
-  // Update the board immediately. Incoming groups always read this latest state.
-  state.setBoard(data,now);
-  transitionPaintedOpacity.fill(-1);
-  dirty=true;
-}
-void ArrivalScreen::nextPlatform(uint32_t now) { requestNavigation(false,now); }
-void ArrivalScreen::nextStation(uint32_t now) { requestNavigation(true,now); }
 void ArrivalScreen::setConnected(bool value) {
   if (connected == value) return;
   connected = value;
@@ -215,47 +252,16 @@ void ArrivalScreen::setBatteryPercent(int percent) {
   const auto value = percent < 0 ? BatteryState::unknown : percent < LOW_BATTERY ? BatteryState::low : percent <= CAUTION_BATTERY ? BatteryState::caution : BatteryState::healthy;
   if (battery != value) { battery = value; dirty = true; }
 }
-bool ArrivalScreen::animationNeedsPerformance(uint32_t) const {
-  if(suspended) return false;
-  if(platformDip.active || springBlock.moving()) return true;
-  for(const auto& fade:etaFades) if(fade.active) return true;
-  return false;
-}
-
 void ArrivalScreen::tick(uint32_t now) {
-  if (suspended) return;
+  if (suspended || renderError) return;
   if (themeDirty) { drawTheme(now); if (themeDirty) return; }
   if (restartConnectionTimer) { connectionAttemptStarted = now; restartConnectionTimer = false; }
   const bool failed = !connected && uint32_t(now - connectionAttemptStarted) >= CONNECTION_WARNING_MS;
   if (connectionFailed != failed) { connectionFailed = failed; dirty = true; }
   if (platformDip.active) { animatePlatform(now); drawSpring(now); return; }
-  const size_t previousPage=state.page;
-  if (state.tick(now)) dirty = true;
-  if(state.page!=previousPage) {
-    beginNavigationTransition(now);
-    if(platformDip.active) { animatePlatform(now);drawSpring(now);return; }
-  }
   if (dirty) draw(now);
   animateEtas(now);
   drawSpring(now);
-}
-
-void ArrivalScreen::suspend(uint32_t now) {
-  if (suspended) return;
-  clearSpring();
-  suspended = true;
-  suspendedAt = now;
-}
-
-void ArrivalScreen::resume(uint32_t now) {
-  if (!suspended) return;
-  const uint32_t elapsed = now - suspendedAt;
-  // Freeze pagination and animation, not train freshness or BLE readiness age.
-  state.pageStarted += elapsed;
-  state.clockAdvanced += elapsed;
-  suspended = false;
-  dirty = true;
-  tick(now); // Show the saved platform/page immediately, without waiting for data.
 }
 
 void ArrivalScreen::text(const std::string& value, int x, int baseline, int width, uint16_t color, uint8_t scale, bool right, const GFXfont* font) {
@@ -300,8 +306,8 @@ void ArrivalScreen::drawEta(size_t slot, int value, uint8_t opacity, bool clear)
 void ArrivalScreen::animateEtas(uint32_t now) {
   bool active=false;
   for (const auto& fade:etaFades) active=active || fade.active;
-  if (!hasRendered || !active || !setPerformanceMode(PerformanceMode::ACTIVE)) return;
-  for (size_t slot=0; slot<3; ++slot)
+  if (!hasRendered || !active) return;
+  for (size_t slot=0; slot<visibleSlots(); ++slot)
     if (etaFades[slot].tick(now))
       drawEta(slot, etaFades[slot].value, etaFades[slot].opacity, true);
 }
@@ -321,8 +327,8 @@ void ArrivalScreen::drawScreenLip(bool footerOnly) {
 void ArrivalScreen::drawFooter(uint32_t now) {
   if(!drawingTarget) {
     if(!navigationCanvas) {
-      navigationCanvas.reset(new Arduino_Canvas(gfx.width(),gfx.height(),nullptr));
-      if(!navigationCanvas->begin()) { navigationCanvas.reset(); return; }
+      navigationCanvas.reset(new (std::nothrow) Arduino_Canvas(gfx.width(),gfx.height(),nullptr));
+      if(!navigationCanvas || !navigationCanvas->begin()) { navigationCanvas.reset(); renderError="framebuffer allocation"; return; }
     }
     drawingTarget=navigationCanvas.get();
     drawFooter(now);
@@ -373,9 +379,6 @@ void ArrivalScreen::drawFooter(uint32_t now) {
 
 void ArrivalScreen::draw(uint32_t now) {
   if(hasRendered && !drawingTarget) { drawIncrementalFrame(now); return; }
-  const uint64_t renderStarted=esp_timer_get_time();
-  DiagnosticStore::shared().event(EventCode::DISPLAY_UPDATE_START,LogLevel::Info,state.hasData);
-  if (!setPerformanceMode(PerformanceMode::ACTIVE)) return;
   dirty = false;
   const int width=surface().width(), height=surface().height(), padding=8;
   const auto& platform=state.current();
@@ -386,25 +389,24 @@ void ArrivalScreen::draw(uint32_t now) {
   if(full) drawInstrumentShell();
   if (full || renderedPlatform.stationName!=platform.stationName || renderedPlatform.direction!=platform.direction) {
     surface().fillRect(8,1,width-16,29,pallete::background());
-    text(platform.direction, width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
+    text(displayDirection(platform.direction), width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
     text(platform.stationName, padding+10, 23, width-129, pallete::primaryText(), 1, false, &BarlowCondensedSemiBold28);
     surface().drawFastHLine(padding,31,width-padding*2,pallete::detail());
     if (state.hasData) DebugLog.printf("[UI] Platform %u/%u: %s / %s\n",
       unsigned(state.platform+1),unsigned(state.data.platformCount),
       platform.stationName.c_str(),platform.direction.c_str());
   }
-  const int rowHeight=(height-52)/3;
-  for (size_t slot=0;slot<3;++slot) {
-    const size_t index=state.page*3+slot;
+  for (size_t slot=0;slot<visibleSlots();++slot) {
+    const size_t index=state.page*visibleSlots()+slot;
     const bool present=index<platform.arrivalCount;
-    const bool wasPresent=hasRendered && renderedPage*3+slot<renderedPlatform.arrivalCount;
-    const int baseline=60+int(slot)*rowHeight;
+    const bool wasPresent=hasRendered && renderedPage*visibleSlots()+slot<renderedPlatform.arrivalCount;
+    const int baseline=cellY(slot)+23;
     if (!present) {
       updateEtaContent(slot,-1,updateKind,now);
       if(!full && wasPresent) {
-        surface().fillRect(70,baseline-23,95,32,pallete::background());
+        surface().fillRect(lineX(slot)-2,baseline-23,routeRegionWidth(slot),32,pallete::background());
         drawLineWindow(slot,nullptr);
-        surface().fillRect(181,baseline-23,width-189,32,pallete::background());
+        if(!state.compact) surface().fillRect(181,baseline-23,width-189,32,pallete::background());
       }
       continue;
     }
@@ -412,13 +414,13 @@ void ArrivalScreen::draw(uint32_t now) {
     updateEtaContent(slot,arrival.eta,updateKind,now);
 
     // Compare nonnumeric cells independently; ETA frames never enter this path.
-    const auto& old=renderedPlatform.arrivals[wasPresent ? renderedPage*3+slot : 0];
+    const auto& old=renderedPlatform.arrivals[wasPresent ? renderedPage*visibleSlots()+slot : 0];
     if (full || !wasPresent || old.routeLabel != arrival.routeLabel || old.routeColor != arrival.routeColor) {
-      if (!full) surface().fillRect(70,baseline-23,95,32,pallete::background());
+      if (!full) surface().fillRect(lineX(slot)-2,baseline-23,routeRegionWidth(slot),32,pallete::background());
       drawLineWindow(slot,&arrival);
-      text(routeAbbreviation(arrival.routeLabel),102,baseline+2,60,pallete::primaryText(),1,false,&BarlowCondensedSemiBold22);
+      text(routeAbbreviation(arrival.routeLabel),nameX(slot),baseline+2,nameWidth(slot),pallete::primaryText(),1,false,&BarlowCondensedSemiBold22);
     }
-    if (full || !wasPresent || old.destination != arrival.destination) {
+    if (!state.compact && (full || !wasPresent || old.destination != arrival.destination)) {
       if (!full) surface().fillRect(181,baseline-23,width-181,32,pallete::background());
       text(arrival.destination,181,baseline+1,width-181-padding,pallete::secondaryText(),1,true,&BarlowCondensedRegular23);
     }
@@ -428,17 +430,7 @@ void ArrivalScreen::draw(uint32_t now) {
     drawFooter(now); renderedFooter=key; renderedFooterStatus=footerStatusKey(now);
   }
   renderedPlatform=platform; renderedPage=state.page; hasRendered=true;
-  DiagnosticStore::shared().event(EventCode::DISPLAY_UPDATE_COMPLETE,LogLevel::Info,state.hasData);
-  if (displayTransaction) {
-    DiagnosticStore::shared().event(EventCode::DISPLAY_UPDATED,LogLevel::Info,
-      int32_t((esp_timer_get_time()-renderStarted)/1000),0,displayTransaction);
-    displayTransaction=0;
-  }
-  if (state.hasData) {
-    DiagnosticStore::shared().startupComplete();
-    const uint64_t latencyMs = esp_timer_get_time()/1000;
-    MetricsStore::shared().recordBootToData(latencyMs > UINT32_MAX ? UINT32_MAX : uint32_t(latencyMs));
-  }
+
 }
 
 void ArrivalScreen::themeChanged(uint32_t now) {
@@ -452,14 +444,17 @@ void ArrivalScreen::themeChanged(uint32_t now) {
 
 void ArrivalScreen::drawTheme(uint32_t now) {
   if (!navigationCanvas) {
-    navigationCanvas.reset(new Arduino_Canvas(gfx.width(), gfx.height(), nullptr));
-    if (!navigationCanvas->begin()) navigationCanvas.reset();
+    navigationCanvas.reset(new (std::nothrow) Arduino_Canvas(gfx.width(), gfx.height(), nullptr));
+    if (navigationCanvas && !navigationCanvas->begin()) navigationCanvas.reset();
   }
-  if (!navigationCanvas) return; // Keep dirty; retry without visibly clearing the panel.
+  if (!navigationCanvas) {
+    renderError="framebuffer allocation";
+    return;
+  }
   drawingTarget = navigationCanvas.get();
   draw(now);
   drawingTarget = nullptr;
-  if (dirty) return; // Performance transition deferred the render.
+  if (dirty || renderError) return;
   gfx.draw16bitRGBBitmap(0, 0, navigationCanvas->getFramebuffer(), gfx.width(), gfx.height());
   themeDirty = false;
 }

@@ -40,7 +40,7 @@ final class TransitDataCache {
         }
     }
 
-    func result(for stations: [CTAStation]) async throws -> CachedTransitData {
+    func result(for stations: [CTAStation], maxAge: TimeInterval = 30) async throws -> CachedTransitData {
         // A station can appear only once, even if metadata contains duplicate rows.
         var seen = Set<String>()
         let candidates = stations.filter { $0.isRealtimeCandidate && seen.insert($0.mapID).inserted }
@@ -50,9 +50,9 @@ final class TransitDataCache {
         if let cached = latest {
             let age = Date().timeIntervalSince(cached.fetchedAt)
             FileLogger.shared.log("[CACHE] age=\(Int(age))s contextMatches=\(cached.context == context)")
-            if cached.context == context, age >= 0, age < Self.freshnessInterval {
+            if cached.context == context, age >= 0, age <= maxAge {
                 PhoneDiagnosticLog.shared.record("PAYLOAD_CACHE_HIT", value1: Int64(cached.payload.count))
-                FileLogger.shared.log("[CACHE] Serving cached transit data")
+                FileLogger.shared.log("[BLE-REQ] Cache hit id=\(PhoneDiagnosticContext.transactionId ?? "local") age=\(Int(age))s")
                 let arrivals = withCurrentDistances(cached.arrivals)
                 let refreshed = CachedTransitData(payload: try LiveTransitFormatter.payload(from: arrivals),
                     arrivals: arrivals, fetchedAt: cached.fetchedAt, context: context)
@@ -67,7 +67,7 @@ final class TransitDataCache {
             return try await task.value
         }
         let task = Task { @MainActor in
-            FileLogger.shared.log("[CACHE] Starting transit API refresh")
+            FileLogger.shared.log("[BLE-REQ] Cache stale/missing id=\(PhoneDiagnosticContext.transactionId ?? "local"); starting station fetch")
             // Conservative age: fetching the second station must not freshen the first.
             let fetchedAt = Date()
             // Backfill failed stations without letting an agency outage scan

@@ -32,6 +32,8 @@ struct CTAArrival: Identifiable, Equatable, Sendable {
     let stationName: String
     let stopDescription: String
     let directionID: String
+    var routeDisplayName: String? = nil
+    var routeDisplayColor: String? = nil
 
     var directionName: String {
         stopDescription

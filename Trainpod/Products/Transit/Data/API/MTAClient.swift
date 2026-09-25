@@ -13,8 +13,8 @@ final class MTAClient {
         var errorDescription: String? { "MTA live arrivals are temporarily unavailable. Please try again." }
     }
 
-    func arrivals(for stations: [StationArrivals]) async throws -> [StationArrivals] {
-        let feeds = try await currentFeeds()
+    func arrivals(for stations: [StationArrivals], maxAge: TimeInterval = 30) async throws -> [StationArrivals] {
+        let feeds = try await currentFeeds(maxAge: maxAge)
         try Task.checkCancellation()
         let now = Date()
         guard feeds.allSatisfy({ Self.isFresh($0, now: now) }) else { throw FeedError.stale }
@@ -25,10 +25,14 @@ final class MTAClient {
         (-60...300).contains(now.timeIntervalSince(feed.timestamp))
     }
 
-    private func currentFeeds() async throws -> [MTAGTFSRealtime.Feed] {
-        if let cached, Date().timeIntervalSince(cached.fetchedAt) < 30,
-           cached.feeds.allSatisfy({ Self.isFresh($0, now: Date()) }) { return cached.feeds }
+    private func currentFeeds(maxAge: TimeInterval) async throws -> [MTAGTFSRealtime.Feed] {
+        if let cached, (0...maxAge).contains(Date().timeIntervalSince(cached.fetchedAt)),
+           cached.feeds.allSatisfy({ Self.isFresh($0, now: Date()) }) {
+            FileLogger.shared.log("[BLE-REQ] Cache hit id=\(PhoneDiagnosticContext.transactionId ?? "local") age=\(Int(Date().timeIntervalSince(cached.fetchedAt)))s")
+            return cached.feeds
+        }
         if let inFlight { return try await inFlight.value }
+        FileLogger.shared.log("[BLE-REQ] Cache stale/missing id=\(PhoneDiagnosticContext.transactionId ?? "local"); starting station fetch")
         let task = Task {
             try await withThrowingTaskGroup(of: MTAGTFSRealtime.Feed.self) { group in
                 for name in Self.feeds {
@@ -38,7 +42,7 @@ final class MTAClient {
                         request.setValue("application/x-protobuf", forHTTPHeaderField: "Accept")
                         let (data, response) = try await URLSession.shared.data(for: request)
                         guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-                        return try MTAGTFSRealtime.decode(data)
+                        return try await MTAGTFSRealtime.decode(data)
                     }
                 }
                 var result: [MTAGTFSRealtime.Feed] = []

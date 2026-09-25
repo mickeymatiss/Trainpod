@@ -2,12 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>KeyTrain Connect uses Bluetooth to send CTA train times to your tracker.</string>
-	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>KeyTrain Connect uses your location once to find the closest CTA train stations.</string>
-	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>KeyTrain Connect uses your current location when you press the tracker button, including while your phone is locked, to fetch nearby trains.</string>
+	<key>TransitManifestBaseURL</key>
+	<string>https://d2xo1bocmox64v.cloudfront.net</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

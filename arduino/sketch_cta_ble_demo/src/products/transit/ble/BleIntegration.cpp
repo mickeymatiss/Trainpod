@@ -9,7 +9,10 @@
 #include "../../../platform/ble/BleSession.h"
 #include "BleIntegration.h"
 #include "RefreshFlow.h"
+#include "../../../../FirmwareConfig.h"
 #include "../ui/theme/pallete.h"
+#include "../ui/DisplayMode.h"
+#include "../../../platform/setup/DeviceProvisioning.h"
 #include "../../../platform/transport/PayloadDelivery.h"
 #include "../../../platform/metrics/MetricsStore.h"
 #include "../../../platform/diagnostics/DiagnosticStore.h"
@@ -18,14 +21,15 @@ extern bool handleUiSerialCommand(const char* command);
 static void (*uiColorChanged)() = nullptr;
 // Atomic ATT command (19 bytes): UC:1234ABCD:#RRGGBB.
 // ACK: UA:1234ABCD:#RRGGBB; errors E1 invalid, E2 storage, E3 busy.
-struct UiColorRequest {
+struct UiSettingsRequest {
   uint32_t token; uint32_t rgb; uint32_t session; bool valid;
   bool isTheme; pallete::Theme theme;
+  bool isViewMode; char viewMode; // ? queries, 0/1 saves, 2/3 saves and completes setup
 };
 static pallete::Theme incomingTheme{};
 static uint32_t themeToken = 0, themeStartedMs = 0;
 static uint8_t themeMask = 0;
-static QueueHandle_t colorRequests;
+static QueueHandle_t settingsRequests;
 static uint32_t connectionSession = 0;
 static bool parseHex(const uint8_t* text, size_t length, uint32_t& value) {
   value = 0;
@@ -39,16 +43,13 @@ static bool parseHex(const uint8_t* text, size_t length, uint32_t& value) {
   return true;
 }
 
-// One episode spans NEED_DATA retries; the first terminal result wins.
-// Keep a failed episode open until data arrives, disconnect, or standby, so
-// repeated lower-level failures cannot inflate either attempts or outcomes.
+// One bounded update episode spans NEED_DATA transport retransmissions.
 static bool fetchEpisode = false;
 static void failFetchEpisode() {
   if (!fetchEpisode) return;
   MetricsStore::shared().recordFetchFailure();
   MetricsStore::shared().recordBootDataFailure();
 }
-static void (*refreshStarted)()=nullptr;
 static bool e2eConnected=false, e2eDisconnected=false, e2eReceiving=false;
 static bool sawRefreshBytes=false;
 
@@ -71,27 +72,70 @@ static BleSession* bleSession=nullptr;
 static uint32_t nextSessionAttemptMs=0;
 static bool sessionWasActive=false;
 static PayloadDelivery::Frame deliveryFrame;
-static uint32_t requestSequence=0, transactionBoot=0, connectionFirstRequest=1;
+static bool discardDeliveryBody=false;
+static uint32_t requestSequence=0, transactionBoot=0;
 static uint64_t latestRequest=0, lastApplied=0;
+// Protected by receiverMutex. No display state participates in this pipeline.
+static constexpr uint32_t UPDATE_TIMEOUT_MS=45000;
+static bool updateActive=false,everStarted=false,retryUpdate=false,applyPending=false,bleReadyLogged=false;
+static uint32_t updateStartedMs=0,nextUpdateMs=0;
+static const char* reasonName(TransitUpdateReason reason) {
+  switch(reason) {
+    case TransitUpdateReason::STARTUP:return "STARTUP";
+    case TransitUpdateReason::REFRESH:return "REFRESH";
+    case TransitUpdateReason::RETRY:return "RETRY";
+    case TransitUpdateReason::USER_REQUEST:return "USER_REQUEST";
+  }
+  return "REFRESH";
+}
+static void stageLocked(const char* stage,uint32_t generation=0) {
+  if(!updateActive) return;
+  InfoLog.printf("%s id=%llu t=%lu elapsed=%lums generation=%lu\n",stage,latestRequest,
+    (unsigned long)millis(),(unsigned long)(millis()-updateStartedMs),(unsigned long)generation);
+}
+static void endUpdateLocked(const char* terminal,const char* reason) {
+  if(!updateActive) return;
+  InfoLog.printf("UPDATE_%s id=%llu t=%lu elapsed=%lums reason=%s\n",terminal,latestRequest,
+    (unsigned long)millis(),(unsigned long)(millis()-updateStartedMs),reason);
+  const bool success=!strcmp(terminal,"COMPLETE");
+  if(!success) { failFetchEpisode();refreshFlow.finish(false,millis()); }
+  fetchEpisode=false;updateActive=false;applyPending=false;retryUpdate=!success;
+  latestRequest=0;deliveryFrame.reset();transitText.reset();discardDeliveryBody=false;
+  nextUpdateMs=millis()+(success ? 0 : RefreshFlow::SLOW_RETRY_MS);
+}
+static bool runTransitUpdateLocked(TransitUpdateReason reason,uint32_t now) {
+  if(updateActive || refreshFlow.paused() || requestSequence==UINT32_MAX || int32_t(now-nextUpdateMs)<0) return false;
+  refreshFlow.demand();
+  updateActive=everStarted=true;applyPending=false;bleReadyLogged=false;
+  updateStartedMs=now;
+  latestRequest=(uint64_t(transactionBoot)<<32)|++requestSequence;
+  DiagnosticStore::shared().retainTransaction(latestRequest);
+  fetchEpisode=true;MetricsStore::shared().recordFetchAttempt();
+  InfoLog.printf("UPDATE_BEGIN id=%llu reason=%s t=%lu\n",latestRequest,reasonName(reason),(unsigned long)now);
+  return true;
+}
+void runTransitUpdate(TransitUpdateReason reason) {
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  runTransitUpdateLocked(reason,millis());
+  xSemaphoreGive(receiverMutex);
+}
+void transitUpdateStage(uint64_t transaction,const char* stage,uint32_t generation) {
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  if(updateActive && transaction==latestRequest) stageLocked(stage,generation);
+  xSemaphoreGive(receiverMutex);
+}
+
 static void receiveFailure(uint64_t tx, uint8_t error) {
   DiagnosticStore::shared().event(EventCode::RESPONSE_RX_FAILED,LogLevel::Warn,error,deliveryFrame.bytes,tx);
 }
 
 
-static void colorAck(uint32_t token, const char* result) {
+static void settingsAck(const char* kind,uint32_t token,const char* result) {
   char ack[24];
-  const int length = snprintf(ack, sizeof(ack), "UA:%08lX:%s", (unsigned long)token, result);
-  if (bleSession && bleSession->isReady())
-    bleSession->characteristic()->notify(reinterpret_cast<const uint8_t*>(ack), length, bleSession->peer());
+  const int length=snprintf(ack,sizeof(ack),"%s:%08lX:%s",kind,(unsigned long)token,result);
+  if(bleSession && bleSession->isReady())
+    bleSession->characteristic()->notify(reinterpret_cast<const uint8_t*>(ack),length,bleSession->peer());
 }
-
-static void themeAck(uint32_t token, const char* result) {
-  char ack[24];
-  const int length = snprintf(ack, sizeof(ack), "TA:%08lX:%s", (unsigned long)token, result);
-  if (bleSession && bleSession->isReady())
-    bleSession->characteristic()->notify(reinterpret_cast<const uint8_t*>(ack), length, bleSession->peer());
-}
-
 
 constexpr size_t RAW_CAPTURE_SIZE=128;
 struct RawWrite {
@@ -122,6 +166,7 @@ public:
       DiagnosticStore::shared().count(DiagnosticCounter::DataTimeout);
       DiagnosticStore::shared().event(EventCode::DATA_REQUEST_TIMEOUT,LogLevel::Warn,0,0,latestRequest);
     }
+    if(!applyPending) endUpdateLocked("TIMED_OUT","BLE session timeout");
     xSemaphoreGive(receiverMutex);
   }
   void onBleWrite(NimBLECharacteristic* c,NimBLEConnInfo& info) override {
@@ -138,6 +183,17 @@ public:
     }
     xSemaphoreTake(receiverMutex,portMAX_DELAY);
     if(bleSession && info.getConnHandle()==bleSession->peer()) {
+      // A complete 13-byte control packet, isolated from transit assembly.
+      if(wireMode!=1 && value.size()>=3 && memcmp(value.data(),"VM:",3)==0) {
+        UiSettingsRequest request{};
+        request.isViewMode=true;request.session=connectionSession;
+        request.valid=value.size()==13 && value[11]==':' && parseHex(value.data()+3,8,request.token) &&
+          (value[12]=='?' || (value[12]>='0' && value[12]<='3'));
+        request.viewMode=request.valid ? value[12] : '?';
+        if(xQueueSend(settingsRequests,&request,0)!=pdTRUE) settingsAck("VA",request.token,"E3");
+        xSemaphoreGive(receiverMutex);
+        return;
+      }
       // Route configuration separately, even during screen-off standby. Never
       // append it to a transit payload or change the connection's wire mode.
       // Six 20-byte UT:<token>:<0..5>:RRGGBB packets, then UT:<token>:C.
@@ -154,44 +210,50 @@ public:
           incomingTheme.rgb[index] = rgb;
           themeMask |= uint8_t(1 << index);
         } else if (tokenValid && value.size() == 13 && value[12] == 'C' && token == themeToken && themeMask == 0x3F) {
-          UiColorRequest request{};
+          UiSettingsRequest request{};
           request.token = token; request.session = connectionSession;
           request.valid = true; request.isTheme = true; request.theme = incomingTheme;
-          if (xQueueSend(colorRequests, &request, 0) != pdTRUE) themeAck(token, "E3");
+          if (xQueueSend(settingsRequests, &request, 0) != pdTRUE) settingsAck("TA",token, "E3");
           themeMask = 0;
         } else {
           themeMask = 0;
-          themeAck(tokenValid ? token : 0, "E1");
+          settingsAck("TA",tokenValid ? token : 0, "E1");
         }
         xSemaphoreGive(receiverMutex);
         return;
       }
       if (wireMode != 1 && value.size() >= 3 && memcmp(value.data(), "UC:", 3) == 0) {
-        UiColorRequest request{};
+        UiSettingsRequest request{};
         request.session = connectionSession;
         const bool hasToken = value.size() >= 12 && value[11] == ':' &&
           parseHex(value.data()+3, 8, request.token);
         if (!hasToken) request.token = 0;
         request.valid = hasToken && value.size() == 19 && value[12] == '#' &&
           parseHex(value.data()+13, 6, request.rgb);
-        if (xQueueSend(colorRequests, &request, 0) != pdTRUE) colorAck(request.token, "E3");
+        if (xQueueSend(settingsRequests, &request, 0) != pdTRUE) settingsAck("UA",request.token, "E3");
         xSemaphoreGive(receiverMutex);
         return;
       }
       if(deliveryHeader) {
         const uint64_t tx=value.size()>=11 ? PayloadDelivery::transaction(value.data()) : 0;
-        if(deliveryFrame.active || deliveryFrame.ready) receiveFailure(deliveryFrame.tx,PayloadDelivery::Frame::Interrupted);
         wireMode=3;
-        if(uint32_t(tx>>32)!=transactionBoot || uint32_t(tx)<connectionFirstRequest || uint32_t(tx)>requestSequence || tx==lastApplied || refreshFlow.paused()) {
+        if(!refreshFlow.requested() || !latestRequest || tx!=latestRequest || tx==lastApplied || refreshFlow.paused()) {
+          InfoLog.printf("[BLE-REQ] Ignoring stale response id=%llu active=%llu\n", tx, latestRequest);
           receiveFailure(tx,refreshFlow.paused() ? PayloadDelivery::Frame::Paused : PayloadDelivery::Frame::StaleTransaction);
-          deliveryFrame.reset();
-        } else if(!deliveryFrame.begin(value.data(),value.size(),arrival)) {
-          receiveFailure(tx,deliveryFrame.error);
+          discardDeliveryBody=true;
+          // Do not discard a matching response already waiting for the app loop.
+        } else if(deliveryFrame.ready) {
+          discardDeliveryBody=true; // Duplicate response while the first awaits parsing.
+        } else {
+          discardDeliveryBody=false;
+          if(deliveryFrame.active) receiveFailure(deliveryFrame.tx,PayloadDelivery::Frame::Interrupted);
+          if(!deliveryFrame.begin(value.data(),value.size(),arrival)) receiveFailure(tx,deliveryFrame.error);
+          deliveryFrame.lastActivity=arrival;
         }
-        deliveryFrame.lastActivity=arrival;
         xSemaphoreGive(receiverMutex); return;
       }
       if(wireMode==3) {
+        if(discardDeliveryBody) { xSemaphoreGive(receiverMutex); return; }
         if(deliveryFrame.active) {
           deliveryFrame.lastActivity=arrival;
           if(!deliveryFrame.chunks) {
@@ -216,7 +278,7 @@ public:
       }
       if(wireMode==0 && value.size()!=0) wireMode=uint8_t(value[0])==0xc0 ? 1 : 2;
       if(wireMode==1) receiver.accept(reinterpret_cast<const uint8_t*>(value.data()),value.size(),arrival);
-      else if(value.size()!=0 && !refreshFlow.paused()) {
+      else if(value.size()!=0 && !refreshFlow.paused() && !refreshFlow.requested()) {
         transitText.accept(value.data(),value.size(),arrival);
       }
     }
@@ -230,10 +292,9 @@ public:
     // Count only concrete incoming connections presented by NimBLE.
     MetricsStore::shared().recordBleAttempt();
     MetricsStore::shared().recordBleSuccess();
-    wireMode=0; transitText.reset(); deliveryFrame.reset();
+    wireMode=0; transitText.reset(); deliveryFrame.reset(); discardDeliveryBody=false;
     themeMask = 0;
     ++connectionSession;
-    connectionFirstRequest=requestSequence+1;
     refreshFlow.onConnected();
     e2eConnected=true;
     xSemaphoreGive(receiverMutex);
@@ -243,13 +304,14 @@ public:
     xSemaphoreTake(receiverMutex,portMAX_DELAY);
     themeMask = 0;
     ++connectionSession;
-    xQueueReset(colorRequests);
-    failFetchEpisode();
-    fetchEpisode=false;
+    xQueueReset(settingsRequests);
+    if(!applyPending) { failFetchEpisode();fetchEpisode=false; }
     if(deliveryFrame.active || deliveryFrame.ready) receiveFailure(deliveryFrame.tx,PayloadDelivery::Frame::Interrupted);
     if(latestRequest && refreshFlow.requested()) DiagnosticStore::shared().event(EventCode::DATA_REQUEST_TIMEOUT,LogLevel::Warn,0,0,latestRequest);
-    wireMode=0; transitText.reset(); deliveryFrame.reset();
+    wireMode=0; transitText.reset(); deliveryFrame.reset(); discardDeliveryBody=false;
     refreshFlow.onDisconnected();
+    // A complete payload handed to the main loop can still be committed after disconnect.
+    if(!applyPending) endUpdateLocked("FAILED","disconnected");
     e2eDisconnected=true;
     receiver.disconnect();
     xSemaphoreGive(receiverMutex);
@@ -275,17 +337,18 @@ void printStats(const BLETestReceiver::Stats& s,uint64_t dropped) {
     s.messages?s.assemblySum/1000.0/s.messages:0,s.assemblyMin/1000.0,s.assemblyMax/1000.0);
   InfoLog.printf("ACK enqueue failures: %llu\nDropped log lines: %llu\n--------------------------------------\n",s.ackFailures,dropped);
 }
-void setupBleIntegration(void (*onRefreshStarted)(), void (*onUiColorChanged)()) {
+void setupBleIntegration(void (*onUiColorChanged)()) {
   uiColorChanged=onUiColorChanged;
-  refreshStarted=onRefreshStarted;
   receiverMutex=xSemaphoreCreateMutex();
-  colorRequests=xQueueCreate(4,sizeof(UiColorRequest));
+  settingsRequests=xQueueCreate(4,sizeof(UiSettingsRequest));
   reports=xQueueCreate(32,sizeof(BLETestReceiver::Result));
   rawWrites=xQueueCreate(16,sizeof(RawWrite));
-  if(!receiverMutex || !reports || !rawWrites || !colorRequests) { WarnLog.println("Test receiver allocation failed"); while(true) delay(1000); }
+  if(!receiverMutex || !reports || !rawWrites || !settingsRequests) { WarnLog.println("Test receiver allocation failed"); while(true) delay(1000); }
   bleSession=&session;
   transactionBoot=MetricsStore::shared().get().bootCount;
-  DebugLog.println("BLE lifecycle ready: on-demand CTA Tracker sessions | 115200 baud");
+  if(FirmwareConfig::BLE_ALWAYS_ON) bleSession->setPermissive(true);
+  InfoLog.printf("[BLE] BLE_ALWAYS_ON=%s; %s\n",FirmwareConfig::BLE_ALWAYS_ON ? "true" : "false",
+    FirmwareConfig::BLE_ALWAYS_ON ? "lifecycle disconnects disabled while powered" : "normal on-demand lifecycle");
 }
 
 void printRawWrite(const RawWrite& raw) {
@@ -303,23 +366,34 @@ void printRawWrite(const RawWrite& raw) {
 
 // The only NEED_DATA notification. Called with receiverMutex held.
 static bool requestRefresh(uint32_t now,bool& sent) {
-  if(wireMode==1 || !bleSession || deliveryFrame.active || deliveryFrame.ready || requestSequence==UINT32_MAX) return false;
+  if(!updateActive || applyPending || wireMode==1 || !bleSession || deliveryFrame.ready) return false;
+  if(bleSession->isReady() && !bleReadyLogged) { bleReadyLogged=true;stageLocked("BLE_READY"); }
+  const bool retry=refreshFlow.requested();
   if(!refreshFlow.requestRefresh(now,bleSession->isConnected(),bleSession->isReady())) return false;
   if(!fetchEpisode) {
     fetchEpisode=true;
     MetricsStore::shared().recordFetchAttempt();
   }
   // Never reset a partially received transfer merely because a retry is due.
-  latestRequest=(uint64_t(transactionBoot)<<32)|++requestSequence;
-  DiagnosticStore::shared().retainTransaction(latestRequest);
+  if(!retry) {
+    InfoLog.printf("[BLE-REQ] Starting STATIONS request id=%llu\n", latestRequest);
+  } else {
+    DiagnosticStore::shared().event(EventCode::DATA_REQUEST_TIMEOUT,LogLevel::Warn,
+      refreshFlow.attemptCount()-1,0,latestRequest);
+    InfoLog.printf("[BLE-REQ] Request id=%llu timed out after 5s; retry=%lu\n",
+      latestRequest,(unsigned long)(refreshFlow.attemptCount()-1));
+  }
   uint8_t request[11]; PayloadDelivery::envelope(request,1,latestRequest);
   DiagnosticStore::shared().event(EventCode::DATA_REQUEST_SENT,LogLevel::Info,0,0,latestRequest);
   auto* characteristic=bleSession->characteristic();
   sent=characteristic && characteristic->notify(request,sizeof(request),bleSession->peer());
   refreshFlow.sent(sent);
+  if(sent) stageLocked("REQUEST_SENT");
+  InfoLog.printf("[BLE-REQ] %s request id=%llu\n",sent ? "Sent" : "Could not enqueue",latestRequest);
   if(!sent) {
     failFetchEpisode();
     DiagnosticStore::shared().event(EventCode::DATA_REQUEST_FAILED,LogLevel::Warn,0,0,latestRequest);
+    endUpdateLocked("FAILED","request enqueue");
   }
   return true;
 }
@@ -346,30 +420,49 @@ void openBleManualWindow() {
 }
 
 void pollBleIntegration() {
-  UiColorRequest colorRequest;
-  if (xQueueReceive(colorRequests, &colorRequest, 0) == pdTRUE) {
+  UiSettingsRequest colorRequest;
+  if (xQueueReceive(settingsRequests, &colorRequest, 0) == pdTRUE) {
     xSemaphoreTake(receiverMutex, portMAX_DELAY);
     const bool current = colorRequest.session == connectionSession && bleSession && bleSession->isConnected();
     xSemaphoreGive(receiverMutex);
     if (current) {
       // No NVS or display work in a BLE callback or under the receiver mutex.
-      const bool saved = colorRequest.valid && (colorRequest.isTheme ? pallete::storeTheme(colorRequest.theme) : pallete::storeUiColor(colorRequest.rgb));
-      if (saved && uiColorChanged) uiColorChanged();
+      const bool previousCompact=DisplayMode::compact();
+      bool saved = colorRequest.valid && (colorRequest.isViewMode
+        ? (colorRequest.viewMode=='?' || DisplayMode::store(colorRequest.viewMode=='1' || colorRequest.viewMode=='3'))
+        : (colorRequest.isTheme ? pallete::storeTheme(colorRequest.theme) : pallete::storeUiColor(colorRequest.rgb)));
+      if(saved && uiColorChanged && (!colorRequest.isViewMode || previousCompact!=DisplayMode::compact())) uiColorChanged();
+      // Setup completion is explicit, persisted, and acknowledged only after
+      // both writes succeed. Ordinary reads/saves never close setup availability.
+      if(saved && colorRequest.isViewMode && (colorRequest.viewMode=='2' || colorRequest.viewMode=='3'))
+        saved=DeviceProvisioning::shared().completeSetup();
       char result[9];
-      if (saved && colorRequest.isTheme) snprintf(result, sizeof(result), "%08lX", (unsigned long)pallete::fingerprint(pallete::theme()));
+      if (saved && colorRequest.isViewMode) strcpy(result,DisplayMode::compact() ? "1" : "0");
+      else if (saved && colorRequest.isTheme) snprintf(result, sizeof(result), "%08lX", (unsigned long)pallete::fingerprint(pallete::theme()));
       else if (saved) snprintf(result, sizeof(result), "#%06lX", (unsigned long)pallete::uiColor());
       else strcpy(result, colorRequest.valid ? "E2" : "E1");
       xSemaphoreTake(receiverMutex, portMAX_DELAY);
       // Never acknowledge an old request to a new connection using the same handle.
       if (colorRequest.session == connectionSession) {
-        if (colorRequest.isTheme) themeAck(colorRequest.token, result);
-        else colorAck(colorRequest.token, result);
+        if (colorRequest.isViewMode) settingsAck("VA",colorRequest.token,result);
+        else if (colorRequest.isTheme) settingsAck("TA",colorRequest.token, result);
+        else settingsAck("UA",colorRequest.token, result);
       }
       xSemaphoreGive(receiverMutex);
     }
   }
 
   const uint32_t loopNow=millis();
+  bool updateTimedOut=false;
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  if(updateActive && uint32_t(loopNow-updateStartedMs)>=UPDATE_TIMEOUT_MS) {
+    endUpdateLocked("TIMED_OUT","update deadline");updateTimedOut=true;
+  }
+  if(!updateActive && !refreshFlow.paused() && refreshFlow.needsData(loopNow))
+    runTransitUpdateLocked(!everStarted ? TransitUpdateReason::STARTUP : retryUpdate ?
+      TransitUpdateReason::RETRY : TransitUpdateReason::REFRESH,loopNow);
+  xSemaphoreGive(receiverMutex);
+  if(updateTimedOut && bleSession) bleSession->abortSession("update deadline");
   if(bleSession) bleSession->update();
   const bool active=bleSession && bleSession->isActive();
   if(sessionWasActive && !active) nextSessionAttemptMs=loopNow+
@@ -378,7 +471,7 @@ void pollBleIntegration() {
   bool shouldStart=false;
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
   shouldStart=((bleSession && bleSession->permissive()) ||
-    (!refreshFlow.paused() && refreshFlow.needsData(loopNow))) &&
+    (!refreshFlow.paused() && updateActive)) &&
     int32_t(loopNow-nextSessionAttemptMs)>=0;
   xSemaphoreGive(receiverMutex);
   if(shouldStart && bleSession && !active) {
@@ -393,10 +486,14 @@ void pollBleIntegration() {
     if(c=='\r' || c=='\n') {
       if(length || overflow) {
         command[length]=0;
-        // UI tuning executes on the app loop, outside the BLE receiver mutex.
+        // UI tuning is queued to the renderer; no drawing under receiverMutex.
         if(!overflow && SerialLog::command(command)) { length=0; overflow=false; continue; }
         if(!overflow) InfoLog.printf("Serial > %s\n",command);
         if(!overflow && handleUiSerialCommand(command)) { length=0; overflow=false; continue; }
+        if(!overflow && !strcmp(command,"transit refresh")) {
+          runTransitUpdate(TransitUpdateReason::USER_REQUEST);
+          length=0;overflow=false;continue;
+        }
         bool show=false,showMetrics=false,resetMetrics=false,recognized=true;
         int permissiveCommand=-1;
         BLETestReceiver::Stats snapshot; uint64_t dropped; bool stopBle=false;
@@ -442,7 +539,7 @@ void pollBleIntegration() {
   if(deliveryFrame.active && uint64_t(esp_timer_get_time())-deliveryFrame.lastActivity>=5000000) {
     receiveFailure(deliveryFrame.tx,PayloadDelivery::Frame::Interrupted);
     DiagnosticStore::shared().event(EventCode::DATA_REQUEST_TIMEOUT,LogLevel::Warn,0,0,deliveryFrame.tx);
-    deliveryFrame.reset(); // Existing request scheduling can resume; no payload retransmission is added.
+    deliveryFrame.reset(); // Discard stalled assembly; the request keeps its ID and timer.
   }
   requestAttempted=requestRefresh(millis(),requestSent);
   const uint32_t attempt=refreshFlow.attemptCount();
@@ -458,7 +555,6 @@ void pollBleIntegration() {
     if(hasData) DebugLog.printf("[DATA] data age=%lus\n",static_cast<unsigned long>(age));
     else DebugLog.println("[DATA] data age=none");
   }
-  if(requestAttempted && refreshStarted) refreshStarted();
   if(requestAttempted) {
     DebugLog.printf("[DATA] NEED_DATA attempt=%lu %s\n",static_cast<unsigned long>(attempt),requestSent ? "sent" : "enqueue failed; will retry");
     if(requestSent) {
@@ -506,9 +602,11 @@ bool takeTransitPayload(String& payload, uint64_t& transactionId) {
   transactionId=0;
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
   if(wireMode==3) {
-    const bool ready=deliveryFrame.ready;
+    const bool ready=deliveryFrame.ready && refreshFlow.requested() && deliveryFrame.tx==latestRequest;
     if(ready) {
       transactionId=deliveryFrame.tx;
+      applyPending=true;stageLocked("RESPONSE_RECEIVED");
+      InfoLog.printf("[BLE-REQ] Response received id=%llu\n",transactionId);
       payload=String(reinterpret_cast<const char*>(deliveryFrame.data),deliveryFrame.bytes);
       deliveryFrame.reset();
     }
@@ -522,12 +620,14 @@ bool takeTransitPayload(String& payload, uint64_t& transactionId) {
   if(transitText.ready(esp_timer_get_time())) {
     overflow=transitText.invalid();
     if(overflow) {
-      refreshFlow.finish(false,millis());
-      failFetchEpisode();
+      endUpdateLocked("FAILED","legacy payload overflow");
     }
     if(!overflow) {
+      if(!updateActive) runTransitUpdateLocked(TransitUpdateReason::USER_REQUEST,millis());
       payload=String(transitText.text());
-      ready=true;
+      transactionId=latestRequest;applyPending=true;
+      stageLocked("RESPONSE_RECEIVED");
+      ready=updateActive;
     }
     transitText.reset();
   }
@@ -556,7 +656,7 @@ void setTransitRefreshPaused(bool paused) {
   xSemaphoreTake(receiverMutex,portMAX_DELAY);
   const bool changed=refreshFlow.paused()!=paused;
   if(changed) {
-    if(paused) { failFetchEpisode(); fetchEpisode=false; }
+    if(paused) { endUpdateLocked("FAILED","paused");failFetchEpisode(); fetchEpisode=false; }
     refreshFlow.setPaused(paused);
     // Ignore a late/incomplete pre-standby response; wake will request a new board.
     transitText.reset();
@@ -576,8 +676,10 @@ void finishTransitRefresh(bool success) {
     // Unsolicited valid app pushes are not device fetch attempts.
     if(fetchEpisode) MetricsStore::shared().recordFetchSuccess();
     fetchEpisode=false;
+    InfoLog.printf("[BLE-REQ] Request id=%llu complete\n",latestRequest);
   } else failFetchEpisode();
   refreshFlow.finish(success,millis());
+  endUpdateLocked(success ? "COMPLETE" : "FAILED",success ? "state committed; render queued" : "invalid/unavailable payload");
   if(success) sawRefreshBytes=false;
   xSemaphoreGive(receiverMutex);
   if(success) {
@@ -598,6 +700,10 @@ bool takeTransitRefreshFailure() {
 
 static void sendApplicationAck(uint64_t tx,uint8_t status,uint16_t bytes) {
   if(!tx) return;
+  xSemaphoreTake(receiverMutex,portMAX_DELAY);
+  const bool framed=wireMode==3;
+  xSemaphoreGive(receiverMutex);
+  if(!framed) return; // Keep legacy text transport free of framed ACKs.
   uint8_t packet[14]; PayloadDelivery::envelope(packet,3,tx); packet[11]=status; PayloadDelivery::put16(packet+12,bytes);
   const bool sent=bleSession && bleSession->sendDiagnosticNotification(packet,sizeof(packet));
   DiagnosticStore::shared().event(sent ? EventCode::DATA_APPLIED_ACK_QUEUED : EventCode::DATA_APPLIED_ACK_FAILED,

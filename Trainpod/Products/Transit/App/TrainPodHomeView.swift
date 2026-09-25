@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct TrainPodHomeView: View {
+    @ObservedObject private var permissions = PermissionSetupState.shared
+    @State private var showingPermissions = false
     @ObservedObject private var bluetooth = BLERuntime.shared.bluetooth
     @ObservedObject private var refreshHandler = BLERuntime.shared.refreshHandler
     @ObservedObject private var bridge = BLERuntime.shared.bridge
@@ -17,20 +19,34 @@ struct TrainPodHomeView: View {
                 citySelector
                 customizationLink
                 connectionCard
+                Button { showingPermissions = true } label: {
+                    Label(permissions.backgroundReady ? "Background access enabled" : "Review background settings",
+                          systemImage: permissions.backgroundReady ? "checkmark.shield" : "exclamationmark.circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
                 phoneStatus
+                if agency == TransitAgency.mbta.rawValue {
+                    Text("Data provided by the Massachusetts Department of Transportation / MBTA.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .padding(24)
         }
         .background(Color(.systemGroupedBackground))
         .navigationTitle("KeyTrain Connect")
+        .sheet(isPresented: $showingPermissions) {
+            PermissionSetupView(permissions: permissions) { showingPermissions = false }
+        }
     }
 
     private var citySelector: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("CITY").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             Picker("City", selection: $agency) {
-                Text("Chicago").tag(TransitAgency.cta.rawValue)
-                Text("New York").tag(TransitAgency.mta.rawValue)
+                ForEach(TransitAgency.allCases) { system in
+                    Text(system.cityName).tag(system.rawValue)
+                }
             }
             .pickerStyle(.segmented)
             .disabled(bridge.isSending)
@@ -127,6 +143,13 @@ struct TrainPodHomeView: View {
                 }
             } label: {
                 Label("Last request", systemImage: "clock")
+            }
+            if let failure = refreshHandler.lastFailure {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Last station-request error").font(.caption.weight(.semibold))
+                    Text(failure).font(.caption).textSelection(.enabled)
+                }
+                .foregroundStyle(.orange)
             }
             if agency == TransitAgency.mta.rawValue, mtaLocationMode != MTALocationMode.current.rawValue {
                 Label("Test location: \(mtaLocationMode)", systemImage: "location.slash")

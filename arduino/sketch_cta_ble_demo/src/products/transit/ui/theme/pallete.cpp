@@ -12,6 +12,7 @@ struct StoredTheme { uint32_t version; pallete::Theme theme; };
 static_assert(sizeof(StoredTheme) == 28, "Stable theme storage layout");
 }
 pallete::Theme pallete::activeTheme = factoryTheme;
+pallete::Theme pallete::renderTheme = factoryTheme;
 
 bool pallete::valid(const Theme& theme) {
   for (uint32_t rgb : theme.rgb) if (rgb > 0xFFFFFF) return false;
@@ -65,7 +66,7 @@ bool pallete::storeUiColor(uint32_t rgb) {
 }
 
 uint16_t pallete::arrivalBadgeText(uint8_t opacity) {
-  const uint32_t fg = activeTheme.rgb[ArrivalBadgeText], bg = activeTheme.rgb[ArrivalBadge];
+  const uint32_t fg = renderTheme.rgb[ArrivalBadgeText], bg = renderTheme.rgb[ArrivalBadge];
   const auto channel = [=](int shift) {
     return (((fg >> shift) & 255) * opacity + ((bg >> shift) & 255) * (255-opacity) + 127) / 255;
   };

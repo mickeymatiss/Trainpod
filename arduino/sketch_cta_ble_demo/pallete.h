@@ -11,6 +11,7 @@ public:
   // RGB888 order matches the app and the version-1 BLE theme protocol.
   enum Role { Background, PrimaryText, Detail, SecondaryText, ArrivalBadge, ArrivalBadgeText, RoleCount };
   struct Theme { uint32_t rgb[RoleCount]; };
+  static void setRenderTheme(const Theme& theme) { renderTheme=theme; }
   static bool storeTheme(const Theme& theme);
   static bool valid(const Theme& theme);
   static uint32_t fingerprint(const Theme& theme);
@@ -18,7 +19,7 @@ public:
   static bool storeUiColor(uint32_t rgb);
   static uint32_t uiColor() { return activeTheme.rgb[Background]; }
   static uint16_t color(Role role) {
-    const uint32_t rgb = activeTheme.rgb[role];
+    const uint32_t rgb = renderTheme.rgb[role];
     return RGB565((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
   }
   static uint16_t background() { return color(Background); }
@@ -48,5 +49,6 @@ public:
 
 private:
   static Theme activeTheme;
+  static Theme renderTheme;
   pallete() = delete;
 };

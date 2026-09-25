@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct NearbyStationsView: View {
+    @ObservedObject private var displayMode = BLERuntime.shared.displayMode
     @StateObject private var viewModel = NearbyStationsViewModel()
     @StateObject private var bluetooth: BluetoothService
     @StateObject private var bridge: MessageBridge
@@ -215,6 +216,15 @@ struct NearbyStationsView: View {
 
             ForEach(stationArrivals) { station in
                 stationSection(station)
+                #if DEBUG
+                Section {
+                    NavigationLink {
+                        ArrivalComparisonView(station: station, system: TransitAgency.selected.systemID)
+                    } label: {
+                        Label("Arrival Comparison · \(station.station.name)", systemImage: "arrow.left.arrow.right")
+                    }
+                }
+                #endif
             }
         }
     }
@@ -267,12 +277,16 @@ struct NearbyStationsView: View {
                             Text("No trains in this direction among the next nine.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        ForEach(platform.trains) { train in
-                            HStack {
-                                RouteBadge(route: train.route, isMTA: true)
-                                Spacer()
-                                Text("\(max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up)))) min")
-                                    .monospacedDigit()
+                        if displayMode.active == .compact {
+                            CompactArrivalsView(direction: platform, isMTA: true)
+                        } else {
+                            ForEach(platform.trains) { train in
+                                HStack {
+                                    RouteBadge(route: train.route, isMTA: true, displayName: train.routeDisplayName, displayColor: train.routeDisplayColor)
+                                    Spacer()
+                                    Text("\(max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up)))) min")
+                                        .monospacedDigit()
+                                }
                             }
                         }
                     }.padding(.vertical, 5)
@@ -286,7 +300,7 @@ struct NearbyStationsView: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(stationArrivals.directions) { direction in
-                    DirectionArrivalsView(direction: direction)
+                    DirectionArrivalsView(direction: direction, compact: displayMode.active == .compact)
                 }
             }
         } header: {
@@ -319,13 +333,16 @@ private struct LogShareSheet: UIViewControllerRepresentable {
 
 private struct DirectionArrivalsView: View {
     let direction: DirectionArrivals
+    var compact = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(direction.name)
                 .font(.subheadline.weight(.semibold))
 
-            if lineGroups.isEmpty {
+            if compact {
+                CompactArrivalsView(direction: direction)
+            } else if lineGroups.isEmpty {
                 Text("No upcoming trains.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -348,7 +365,7 @@ private struct DirectionArrivalsView: View {
             if let index = groups.firstIndex(where: { $0.route == train.route }) {
                 groups[index].etas.append(eta)
             } else {
-                groups.append(TrainLineGroup(route: train.route, etas: [eta]))
+                groups.append(TrainLineGroup(route: train.route, etas: [eta], displayName: train.routeDisplayName, displayColor: train.routeDisplayColor))
             }
         }
 
@@ -356,9 +373,33 @@ private struct DirectionArrivalsView: View {
     }
 }
 
+// The same chronological ordering as the device: left-to-right, then down.
+private struct CompactArrivalsView: View {
+    let direction: DirectionArrivals
+    var isMTA = false
+
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+            ForEach(Array(LiveTransitFormatter.upcomingTrains(direction.trains).prefix(6))) { train in
+                HStack(spacing: 6) {
+                    Text("\(max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up))))")
+                        .font(.headline.monospacedDigit().italic())
+                        .frame(minWidth: 38, minHeight: 30)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    RouteBadge(route: train.route, isMTA: isMTA, compact: true, displayName: train.routeDisplayName, displayColor: train.routeDisplayColor)
+                    Spacer(minLength: 0)
+                }
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+}
+
 private struct TrainLineGroup: Identifiable {
     let route: String
     var etas: [Int]
+    var displayName: String? = nil
+    var displayColor: String? = nil
 
     var id: String { route }
 }
@@ -368,7 +409,7 @@ private struct TrainLineGroupView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            RouteBadge(route: group.route)
+            RouteBadge(route: group.route, displayName: group.displayName, displayColor: group.displayColor)
 
             HStack(spacing: 12) {
                 ForEach(group.etas, id: \.self) { eta in
@@ -384,31 +425,52 @@ private struct TrainLineGroupView: View {
 private struct RouteBadge: View {
     let route: String
     var isMTA = false
+    var compact = false
+    var displayName: String? = nil
+    var displayColor: String? = nil
 
     var body: some View {
-        Text(routeName)
-            .font(.caption.weight(.bold))
-            .foregroundStyle(.white)
-            .frame(minWidth: 52, minHeight: 26)
-            .background(routeColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .accessibilityLabel("Route \(route)")
-    }
-
-    private var routeName: String {
-        if isMTA { return route.uppercased() }
-        switch route.lowercased() {
-        case "g": return "Green"
-        case "brn": return "Brown"
-        case "org": return "Orange"
-        case "p": return "Purple"
-        case "pexp": return "Purple Express"
-        case "pnk", "pink": return "Pink"
-        case "y": return "Yellow"
-        default: return route.capitalized
+        if compact {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 3).fill(compactColor).frame(width: 18, height: 18)
+                Text(compactName)
+                    .font(.caption.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
+            }
+            .accessibilityLabel("Route \(routeName)")
+        } else {
+            Text(routeName)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.white)
+                .frame(minWidth: 52, minHeight: 26)
+                .background(routeColor, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .accessibilityLabel("Route \(route)")
         }
     }
 
+    private var routeName: String {
+        displayName ?? (isMTA ? route.uppercased() : LiveTransitFormatter.routeName(for: route))
+    }
+    private var compactName: String {
+        if let displayName { return displayName }
+        if isMTA { return route.uppercased() }
+        switch route.lowercased() {
+        case "g": return "GRN"
+        case "blue": return "BLU"
+        case "brn": return "BRN"
+        case "org": return "ORG"
+        case "pnk", "pink": return "PNK"
+        case "y": return "YLW"
+        default: return String(routeName.prefix(3)).uppercased()
+        }
+    }
+    private var compactColor: Color {
+        if let displayColor { return DeviceTheme.color(displayColor) }
+        let hex = isMTA ? MTARouteStyle.hex(route) : LiveTransitFormatter.routeColorHex(for: route)
+        return DeviceTheme.color("#" + hex)
+    }
+
     private var routeColor: Color {
+        if let displayColor { return DeviceTheme.color(displayColor) }
         if isMTA {
             let rgb = UInt32(MTARouteStyle.hex(route), radix: 16) ?? 0x808183
             return Color(red: Double((rgb >> 16) & 255) / 255,

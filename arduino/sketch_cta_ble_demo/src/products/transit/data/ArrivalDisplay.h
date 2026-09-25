@@ -69,7 +69,9 @@ public:
     }
     page = 0; pageStarted = now;
   }
-  size_t pageCount() const { return std::max(size_t(1), (std::min(size_t(9), current().arrivalCount) + 2) / 3); }
+  bool compact = false;
+  size_t arrivalsPerPage() const { return compact ? 6 : 3; }
+  size_t pageCount() const { return std::max(size_t(1), (std::min(size_t(9), current().arrivalCount) + arrivalsPerPage()-1) / arrivalsPerPage()); }
   uint32_t pageIntervalMs() const { return page==0 ? FirstArrivalPageIntervalMs : ArrivalPageIntervalMs; }
   bool tick(uint32_t now) {
     bool changed = false;

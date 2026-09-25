@@ -15,7 +15,7 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
     const int cy=y<10 ? 10-y : y>=22 ? y-21 : 0;
     pixels[y*54+x]=cx && cy && cx*cx+cy*cy>100 ? pallete::background() : bg;
   }
-  const int top=37+int(slot)*((gfx.height()-52)/3);
+  const int top=cellY(slot);
   // Fit measured ink bounds and all offset layers inside a safe inset rectangle.
   int left=0,right=0,above=0,below=0;
   if(effects.depth) {
@@ -38,7 +38,7 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
   const int inkW=(w*uniformScale+9999)/10000,inkH=(h*uniformScale+9999)/10000;
   const int originX=std::max(clipX+left,std::min((54-inkW)/2,54-clipX-right-inkW));
   const int originY=std::max(clipY+above,std::min((32-inkH)/2,32-clipY-below-inkH));
-  etaBounds[slot]={int16_t(8+originX),int16_t(top+originY),uint16_t(inkW),uint16_t(inkH)};
+  etaBounds[slot]={int16_t(cellX(slot)+originX),int16_t(top+originY),uint16_t(inkW),uint16_t(inkH)};
   if(!value.empty() && (etaLoggedValue[slot]!=value || etaLoggedScale[slot]!=uniformScale)) {
     DebugLog.printf("ETA \"%s\" width=%d height=%d xOffset=%d yOffset=%d fontSize=%d scaleX=%d/10000 scaleY=%d/10000 monitorWidth=54 clipWidth=%d clipHeight=%d\n",
       value.c_str(),w,h,bx,by,fontPoints,uniformScale,uniformScale,clipW,clipH);
@@ -46,7 +46,8 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
   }
   // Inverse-sample once, so integer rounding cannot collapse forward-mapped
   // columns onto each other. Every visual layer uses this exact same mask.
-  std::array<uint8_t,54*32> ink{};
+  auto& ink=etaInk;
+  ink.fill(0);
   for(int y=0;y<inkH;++y) for(int x=0;x<inkW;++x) {
     const int sourceX=std::min(w-1,((2*x+1)*10000)/(2*uniformScale))+bx;
     const int sourceY=std::min(h-1,((2*y+1)*10000)/(2*uniformScale))+by;
@@ -85,15 +86,15 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
   // Cache the rim at its normal color so ETA fades never erase or dim it.
   if(!etaRimValid[slot]) {
     for(int y=0;y<32;++y) for(int x=0;x<54;++x) {
-      const bool rim=bezel.eta && bezel.rim(x,y,54,32,10,(8u<<16)|uint32_t(top));
+      const bool rim=bezel.eta && bezel.rim(x,y,54,32,10,(uint32_t(cellX(slot))<<16)|uint32_t(top));
       etaRimMask[slot][y*54+x]=rim;
-      if(rim) pixels[y*54+x]=bezel.color(x,y,54,32,pallete::arrivalBadge(),pallete::background(),(8u<<16)|uint32_t(top));
+      if(rim) pixels[y*54+x]=bezel.color(x,y,54,32,pallete::arrivalBadge(),pallete::background(),(uint32_t(cellX(slot))<<16)|uint32_t(top));
     }
     etaRimValid[slot]=true;
   }
   // Only the numeric interior is transferred, never the capsule's rounded edges.
   for(int y=2;y<30;++y)
-    surface().draw16bitRGBBitmap(10,top+y,pixels.data()+y*54+2,50,1);
+    surface().draw16bitRGBBitmap(cellX(slot)+2,top+y,pixels.data()+y*54+2,50,1);
 }
 
 void ArrivalScreen::printEffects(bool help) {

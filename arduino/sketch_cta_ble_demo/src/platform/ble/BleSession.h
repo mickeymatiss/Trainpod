@@ -48,7 +48,7 @@ public:
   static bool anySessionActive();
   bool isActive() const { return state_.load() != BleSessionState::Off; }
   bool isConnected() const { return peer_.load() != BLE_HS_CONN_HANDLE_NONE; }
-  bool isReady() const { return isConnected() && subscribed_.load() && !closePending_.load() && !diagnosticsActive(); }
+  bool isReady() const { return !setupConnection_.load() && isConnected() && subscribed_.load() && !closePending_.load() && !diagnosticsActive(); }
   bool diagnosticsActive() const;
   bool sendDiagnosticNotification(const uint8_t* bytes, size_t count);
   size_t notificationCapacity() const;
@@ -95,6 +95,9 @@ private:
   std::atomic<BleSessionState> state_{BleSessionState::Off};
   std::atomic<uint16_t> peer_{BLE_HS_CONN_HANDLE_NONE};
   std::atomic<bool> subscribed_{false};
+  std::atomic<bool> setupConnection_{false};
+  bool setupLifecycle_=false;
+  uint32_t setupRetryMs_=0;
   std::atomic<bool> disconnected_{false};
   std::atomic<bool> closePending_{false};
   std::atomic<bool> permissive_{false}; // Debug override; resets on reboot.
@@ -102,6 +105,7 @@ private:
   bool manualWindow_ = false; // Arduino loop owns the manual-window timer.
   uint32_t manualWindowStartedMs_ = 0;
   uint32_t manualRetryMs_ = 0;
+  uint32_t availabilityRetryMs_ = 0;
   uint32_t sessionStartedMs_ = 0;
   uint32_t completionStartedMs_ = 0;
   uint32_t stoppingStartedMs_ = 0;

@@ -30,9 +30,12 @@ bool ArrivalScreen::transitionCommand(const char* command,uint32_t now) {
     }
     if(!matched) { InfoLog.println("ERR transition: use status, on, off, outms, inms, stagger, gap");return true; }
   }
-  InfoLog.printf("OK transition %s outms=%d inms=%d stagger=%d gap=%d total=%dms active=%d\n",
-    s.enabled?"on":"off",s.outMs,s.inMs,s.stagger,s.gap,
-    s.enabled?s.outMs+s.gap+s.inMs+4*s.stagger:0,platformDip.active);
+  const int fieldsDuration=s.outMs+s.gap+s.inMs+4*s.stagger;
+  const int contentDuration=s.outMs+s.gap+int(PlatformDip::DESTINATION_START_MS+PlatformDip::CONTENT_IN_MS);
+  InfoLog.printf("OK transition %s outms=%d inms=%d stagger=%d gap=%d lightin=%lums total=%dms active=%d\n",
+    s.enabled?"on":"off",s.outMs,s.inMs,s.stagger,s.gap,(unsigned long)PlatformDip::LIGHT_IN_MS,
+    s.enabled ? (fieldsDuration>contentDuration ? fieldsDuration : contentDuration) : 0,platformDip.active);
+  InfoLog.println("Incoming sequence: colors, numbers, names, destinations and changed distance together 0..300ms (after outms+gap)");
   if(!std::strcmp(command,"transition help"))
     InfoLog.println("transition outms 40..200 | inms 40..250 | stagger 0..80 | gap 0..80. RAM-only; timing edits apply on next transition.");
   return true;
