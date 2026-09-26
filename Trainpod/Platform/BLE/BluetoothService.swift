@@ -352,6 +352,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func resumeDataPath(_ peripheral: CBPeripheral) {
+        guard self.peripheral === peripheral, peripheral.state == .connected, central.state == .poweredOn else { return }
         guard bindingAllowsConnection, !writeRetirement.blocks(peripheral), !dataPathStarted else { return }
         connectedDeviceId = nil; writableCharacteristic = nil
         identityVerificationTask?.cancel()
@@ -1077,11 +1078,16 @@ extension BluetoothService: CBPeripheralDelegate {
         Task { @MainActor in
             guard peripheral === self.peripheral, characteristic === writableCharacteristic else { return }
             if let error {
+                dataPathStarted = false
+                writableCharacteristic = nil
                 setConnectionState(.error("ACK subscription failed: \(error.localizedDescription)"))
             } else if characteristic.isNotifying {
+                guard connectionState != .connected else { return }
                 log("ACK notification subscription confirmed")
                 setConnectionState(.connected)
             } else {
+                dataPathStarted = false
+                writableCharacteristic = nil
                 setConnectionState(.error("ACK notifications are disabled. Reconnect before testing."))
             }
         }

@@ -33,14 +33,31 @@ Response delegate handling remains synchronous on the main queue. Before disconn
 
 No hardware checks have been run. These scenarios validate F01 only and will be consolidated with later successful passes.
 
+## Pass 1B — F02
+
+**PASS — MANUAL VERIFICATION REQUIRED**
+
+- **Files changed:** `BluetoothService.swift` and the pass/aggregate reports.
+- **Behavioral problem:** notification failure or disable left `dataPathStarted` true, making a later Connect/resume return without retrying startup.
+- **Characterization used:** direct state-transition trace through `resumeDataPath`, identity verification, configuration, notification callbacks and disconnect. Failure now yields `dataPathStarted = false` plus no writable handle; retry re-enters the existing identity/discovery flow. Success retains the started latch; duplicate success returns while already connected. Disconnect keeps its original reset. Retry now rejects a non-owned or non-connected peripheral and a non-powered-on central.
+- **Production change:** six added guard/reset lines, no discovery/reconnect or identity algorithm change. Clearing the failed handle also prevents a delayed success for that failed attempt from restoring readiness before a legitimate resume.
+- **Targeted verification:** source transition review and actual iOS target build PASS. No host regression test was added: testing this delegate-specific glue independently would require a fake CoreBluetooth layer or extracting trivial booleans solely to test them. The existing host tests do not prove notification recovery. The five requested scenarios are explicit manual obligations below.
+- **Broader tests:** pre-change suite was F01's green 18; post-change clean-cache run 18/18 PASS, one compiled-only, one manual. Debug Xcode simulator build PASS. An initial cache-symlink reuse attempt caused Swift duplicate-module/compiler failures and downstream generated-payload failures; preserved separately, then rerun successfully with an independent cache. No fixtures or expectations were changed to resolve that tool-cache failure.
+- **Manual required:** F02-M1 normal subscription emits readiness once; F02-M2 inject failed/disabled subscription then use existing Connect/resume and confirm recovery; F02-M3 duplicate success does not re-announce readiness; F02-M4 disconnect resets startup; F02-M5 attempt a stale-peer resume across A-to-B selection and confirm no discovery starts on A. Combine with F01 normal/reconnect smoke where possible.
+- **Known limitation:** no automatic retry trigger was added. Recovery waits for an existing legitimate resume/reconnect action. OS subscription/identity interaction remains hardware verified, not host verified.
+- **Commit message:** `reliability(ble): allow notification startup retry [F02]`.
+- **Rollback:** independently revert the local guard/reset changes; no new dependency on the F01 helper was introduced.
+
 ## Campaign progress
 
-Only F01 has been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01 and F02 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1A | F01 | See delivered commit ID | BLE wait/retirement/ownership: PASS | 18 host PASS; Xcode PASS | F01-M1–M4 | PASS — MANUAL VERIFICATION REQUIRED | Yes, independent commit |
+| 1A | F01 | `d022b55` | BLE wait/retirement/ownership: PASS | 18 host PASS; Xcode PASS | F01-M1–M4 | PASS — MANUAL VERIFICATION REQUIRED | Yes, independent commit |
+
+| 1B | F02 | See delivered commit ID | State trace + Xcode PASS; callbacks manual | 18 host PASS | F02-M1–M5 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local guard/reset changes |
 
 ## Deliberately unchanged
 
-F02, F03, F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F03, F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
