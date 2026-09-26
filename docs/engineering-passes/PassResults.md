@@ -186,7 +186,7 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 
 ## Campaign disposition
 
-Eleven production passes are committed, including the approved F13 policy. C1–C7 remain unstarted; this follow-up implements only F13 and does not mix cleanup into its commit. The policy blocker is resolved, while manual obligations for earlier passes remain.
+Eleven reliability/UI passes and C1–C4 cleanup are committed separately. C5–C7 remain unstarted. The F13 policy blocker is resolved; existing hardware obligations remain. C3/C4 deletion rollback order is documented below.
 
 The separate commits are bounded, but accumulating reports and a shared registry make several raw `git revert` operations conflict. F01 also overlaps later local BLE guards. Prepared reverse patches in `rollback/` preserve unrelated later changes; see AggregateVerification for their actual verification limits. F09 rollback removes its cross-session assertion from the later F10 integration fixture while preserving F10's render-certainty fix. No history has been squashed or rewritten.
 
@@ -202,18 +202,18 @@ The separate commits are bounded, but accumulating reports and a shared registry
 | 5 | F12 | `fe53a58` | Deadline/refresh flow PASS | 22 host PASS | Optional wake | PASS | Bounded reverse patch; host-tested, see limits |
 | 6 | F11 | `27fc013` | Direction fixtures PASS | 23 host PASS | Required visual label | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
 | 7A | F14 | `a7dc7a9` | Equal ETA identity PASS | 24 host PASS | Optional UI | PASS | Bounded reverse patch; host-tested, see limits |
-| 7B | F13 | This F13 commit | Four-agency recovery/cadence/cancellation PASS | 24 host PASS; Xcode PASS | Optional foreground UI smoke | PASS | Local model/test revert; no later production dependency |
-| 8A | C1 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
-| 8B | C2 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
-| 8C | C3 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
-| 8D | C4 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 7B | F13 | `fccebae` | Four-agency recovery/cadence/cancellation PASS | 24 host PASS; Xcode PASS | Optional foreground UI smoke | PASS | Local model/test revert; no later production dependency |
+| 8A | C1 | `ee5977a` | Source/prose review; no code change | 24 host PASS | No | PASS | Documentation only |
+| 8B | C2 | `1409782` | Exact commands/arguments/status JSON equality | 24 host PASS | No | PASS | Runner reporting only |
+| 8C | C3 | `96b45c1` | Nearby characterization + Debug build PASS | 24 host PASS | Optional UI smoke | PASS | Revert C4 first for verbatim C3 restore |
+| 8D | C4 | `676ca2d` | Reference proof; Nearby/transit tests; Debug + Release builds PASS | 24 host PASS; ESP32 compile PASS | No new hardware requirement | PASS | Local deletion reversal; C3 dependency noted |
 | 8E | C5 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
 | 8F | C6 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
 | 8G | C7 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
 
 ## Deliberately unchanged
 
-- **C1–C7:** not part of this F13-only follow-up. No documentation cleanup, runner redesign, dependency/provider/experiment deletion, grouping relocation or formatter cleanup was performed. Their merits have not been reassessed during this campaign.
+- **C5–C7:** not requested in this follow-up. Grouping ownership, firmware experiments and formatter readability remain unchanged; no conditional deletion/relocation decision was inferred.
 - **F06:** unsolicited developer-send framing; **F08:** setup/display-mode partial success; **F15:** freshness/retained-board contract; **F16:** station backfill; **F17:** platform identity/grouping; **F18:** ownership/authentication/security; **F19+:** provider/network policy. Explicitly outside scope.
 - **F07:** shared location waiters was not in the authorized implementation list.
 - Power architecture, BLE availability policy, renderer architecture, diagnostic firmware purge, provisioning, protocol versions and broad naming remain unchanged.
@@ -266,7 +266,7 @@ Remaining limitations are recorded under each implemented pass: host continuatio
 - **Manual verification required:** none added; optional Nearby UI smoke only.
 - **Known limitation:** the test does not render SwiftUI or exercise live location; source ownership and native compilation establish the deletion boundary.
 - **Commit message:** cleanup(ui): remove unused nearby dependencies [C3].
-- **Rollback:** restore 14 removed lines; no active provider or grouping change.
+- **Rollback:** restore 14 removed lines; no active provider or grouping change. After C4, revert C4 first for the removed cache property to compile. This deletion dependency is not a conflict-free independent raw revert.
 
 ## Pass 8D — C4 dormant direct provider/cache
 

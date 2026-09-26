@@ -1,6 +1,6 @@
 # Aggregate verification
 
-Eleven bounded production passes completed, including the user-approved F13 policy. C1–C7 remain unstarted; this follow-up changed only F13. Work is on `engineering/bounded-campaign` in the isolated campaign checkout. Original source checkout and main were not modified; nothing was pushed.
+Eleven bounded reliability/UI passes and four separate cleanup passes C1–C4 are complete. C5–C7 remain unstarted. Work is on `engineering/bounded-campaign` in the isolated campaign checkout. Original source checkout and main were not modified; nothing was pushed.
 
 ## Final results
 
@@ -125,3 +125,14 @@ The user approved periodic recovery on the existing 60-second cadence. Historica
 Before this change: historical policy characterization and all 24 host harnesses PASS. The new initial-recovery assertion failed on old code, then the full new four-agency characterization passed after the local view-model change. Expanded tests confirm complete retained arrival data and timestamps, no fetch without a stepped cadence tick, recovery with new data, user-triggered replacement, cancellation during initial/periodic fetch, and invalidated-context CancellationError termination. All 24 standard harnesses and normal Xcode simulator build PASS afterward. No firmware source changed; the earlier ESP32 target compile remains the applicable target result.
 
 Optional F13 manual smoke: interrupt foreground Nearby networking for multiple intervals, verify last loaded rows and original updated time persist, restore networking and observe the next normal refresh; leave the view and verify no future periodic requests. Not performed. Tests intentionally replace only the sleep expression in an external test copy and cannot establish OS scheduling/network behavior. Background device serving and provider fallback are untouched.
+
+## C1–C4 combined verification
+
+- C1 `ee5977a`: documentation only; source/prose review and 24 host tests before/after PASS.
+- C2 `1409782`: runner reporting only; before/after results.json exactly equal (all commands, arguments, statuses), with unchanged execution semantics. Output now names 26 present registrations, 25 compiled executables, 24 executed/passed, one compiled-only, one manual, and two separately invoked harnesses.
+- C3 `96b45c1`: three unused Nearby owners, one uncalled private helper and unused import removed; initializer/reference inspection, unchanged Nearby characterization, 24 host tests and Debug simulator build PASS.
+- C4 `676ca2d`: unconstructed direct-provider class/cache removed; shared protocol/errors and exact 30-second location predicate preserved. Active fallback/comparison/DEBUG-used release sources retained. All host tests, Nearby characterization and Debug/Release simulator builds PASS.
+
+Final combined rerun: 24 standard host harnesses PASS (same names/statuses as the table above); separate four-agency Nearby characterization PASS. ESP32-C6 target compile PASS with unchanged firmware: 941626 program bytes, 192688 global bytes; no upload. Shared TP2/P1 fixtures, formatter and TransitMessage source remain unchanged from pre-cleanup fccebae; generated platform.txt and mta.txt exactly match the original campaign baseline. No new hardware test is claimed or required by these deletion/reporting passes. Existing hardware scenarios remain pending; optional normal Nearby/device refresh smoke can accompany them.
+
+Rollback limitation: C1/C2 are independent reporting changes; C4 restores its deleted chain independently. A verbatim C3 reversal after C4 references the removed cache type, so revert C4 before C3. Shared historical report edits can conflict. The old ten-pass reverse patches/matrix predate C1–C4 and are historical evidence, not a fresh guarantee for this new head; always re-check applicability and run tests. Cleanup did not alter persisted data or wire contracts.
