@@ -1,0 +1,10 @@
+cta	valid	3,3
+mta_empty	valid	3,0
+agencies	valid	1,1
+long_names	valid	1
+identity	valid	0,0
+bad_checksum	invalid	-
+incomplete	invalid	-
+bad_record	invalid	-
+unavailable	unavailable	-
+near_limit	valid	5,5,5,6

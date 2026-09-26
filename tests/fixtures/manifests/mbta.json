@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "systemId": "mbta",
+  "generatedAt": "2026-09-25T00:00:00Z",
+  "sourceVersion": "synthetic-v1",
+  "routes": {
+    "R": {
+      "id": "R",
+      "name": "Route",
+      "color": "#123456",
+      "textColor": "#FFFFFF"
+    }
+  },
+  "stations": {
+    "S": {
+      "id": "S",
+      "name": "Station",
+      "latitude": 41,
+      "longitude": -87,
+      "platforms": {
+        "P": {
+          "id": "P",
+          "direction": "North",
+          "routeIds": [
+            "R"
+          ]
+        }
+      }
+    }
+  }
+}

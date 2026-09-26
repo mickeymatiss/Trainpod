@@ -1,0 +1,451 @@
+[
+  {
+    "name": "cta",
+    "stations": [
+      {
+        "id": "1",
+        "name": "Grand (Red Line)",
+        "distance": 1126.5408,
+        "platforms": [
+          {
+            "id": "S",
+            "name": "Southbound",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 3
+              },
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 1
+              },
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 2
+              }
+            ]
+          },
+          {
+            "id": "N",
+            "name": "Northbound",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 3
+              },
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 1
+              },
+              {
+                "route": "red",
+                "destination": "Howard",
+                "minutes": 2
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "mta_empty",
+    "stations": [
+      {
+        "id": "MTA-1",
+        "name": "One",
+        "distance": 100,
+        "platforms": [
+          {
+            "id": "N",
+            "name": "Northbound",
+            "trains": [
+              {
+                "route": "F",
+                "destination": "Northbound",
+                "minutes": 2
+              },
+              {
+                "route": "G",
+                "destination": "Northbound",
+                "minutes": 1
+              },
+              {
+                "route": "7",
+                "destination": "Northbound",
+                "minutes": 3
+              }
+            ]
+          },
+          {
+            "id": "S",
+            "name": "Southbound",
+            "trains": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "agencies",
+    "stations": [
+      {
+        "id": "BART-1",
+        "name": "Embarcadero",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "O",
+            "name": "Outbound",
+            "trains": [
+              {
+                "route": "Y",
+                "destination": "Antioch",
+                "minutes": 4,
+                "displayName": "Yellow",
+                "displayColor": "#FFFF33"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "MBTA-1",
+        "name": "Park Street",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "I",
+            "name": "Inbound",
+            "trains": [
+              {
+                "route": "R",
+                "destination": "Ashmont",
+                "minutes": 6,
+                "displayName": "Red",
+                "displayColor": "#DA291C"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "long_names",
+    "stations": [
+      {
+        "id": "L",
+        "name": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "ne",
+            "name": "NE",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 3,
+                "displayName": "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRR"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "identity",
+    "stations": [
+      {
+        "id": "1",
+        "name": "Same",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "a",
+            "name": "North",
+            "trains": []
+          }
+        ]
+      },
+      {
+        "id": "2",
+        "name": "Same",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "b",
+            "name": "North",
+            "trains": []
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "near_limit",
+    "stations": [
+      {
+        "id": "0",
+        "name": "Station 0 SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "North",
+            "name": "North",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 1,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 2,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 3,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 4,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 5,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 6,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 7,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 8,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 9,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              }
+            ]
+          },
+          {
+            "id": "South",
+            "name": "South",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 1,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 2,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 3,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 4,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 5,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 6,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 7,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 8,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 9,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "1",
+        "name": "Station 1 SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "distance": null,
+        "platforms": [
+          {
+            "id": "North",
+            "name": "North",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 1,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 2,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 3,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 4,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 5,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 6,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 7,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 8,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 9,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              }
+            ]
+          },
+          {
+            "id": "South",
+            "name": "South",
+            "trains": [
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 1,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 2,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 3,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 4,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 5,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 6,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 7,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 8,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              },
+              {
+                "route": "red",
+                "destination": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+                "minutes": 9,
+                "displayName": "RRRRRRRRRRRRRRRRRRRR"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

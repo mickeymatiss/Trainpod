@@ -1,13 +1,6 @@
 import Foundation
 import Combine
 
-// Standalone harness shims for the app's existing selection/logger dependencies.
-enum TransitAgency { case cta, mta }
-final class FileLogger {
-    static let shared = FileLogger()
-    func log(_ message: String) {}
-}
-
 @MainActor
 final class FakeClient: TransitManifestFetching {
     var results: [TransitSystemID: ManifestFetchResult] = [:]
@@ -61,7 +54,14 @@ extension TransitManifestManager {
 @main
 struct ManifestChecks {
     @MainActor static func main() async throws {
-        let paths = Array(CommandLine.arguments.dropFirst())
+        let fixtures = URL(fileURLWithPath: CommandLine.arguments[1])
+        let paths = ["nyc", "cta"].map { fixtures.appendingPathComponent($0 + ".json").path }
+        for system in [TransitSystemID.nyc, .cta, .bart, .mbta] {
+            let data = try Data(contentsOf: fixtures.appendingPathComponent(system.rawValue + ".json"))
+            let manifest = try JSONDecoder().decode(TransitSystemManifest.self, from: data)
+            try TransitManifestValidator.validate(manifest, expectedSystemID: system)
+            assert(system.agency.systemID == system)
+        }
         let nycData = try Data(contentsOf: URL(fileURLWithPath: paths[0]))
         let ctaData = try Data(contentsOf: URL(fileURLWithPath: paths[1]))
         let decoder = JSONDecoder()
@@ -148,6 +148,6 @@ struct ManifestChecks {
         MockHTTP.status = 503
         do { _ = try await http.fetch(systemID: .nyc, etag: nil); fatalError("Accepted HTTP 503") }
         catch TransitManifestError.httpStatus(503) {}
-        print("Passed: both real manifests, isolated caches/ETags, 304, offline restart, invalid replacement, failed disk write, city-switch race, immediate activation, silent 304/failure, and HTTP behavior.")
+        print("Passed: four synthetic manifests, isolated caches/ETags, 304, offline restart, invalid replacement, failed disk write, city-switch race, immediate activation, silent 304/failure, and HTTP behavior.")
     }
 }

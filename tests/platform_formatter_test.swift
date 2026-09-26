@@ -1,20 +1,12 @@
 import Foundation
 
-// Host-only models keep the production formatter executable without UIKit.
-struct CTAStation { let name: String }
-struct CTAArrival { let route: String; let destination: String; let arrivalTime: Date }
-struct DirectionArrivals { let id: String; let name: String; let trains: [CTAArrival] }
-struct StationArrivals { let station: CTAStation; let directions: [DirectionArrivals]; var distanceMeters: Double? = nil }
-enum LiveTransitError: Error { case noDirections, payloadTooLarge }
-struct FileLogger { static let shared = FileLogger(); func log(_ text: String) {} }
-
 @main struct PlatformFormatterTest {
     static func main() throws {
         let trains = (0..<6).reversed().map {
-            CTAArrival(route: "red", destination: "Howard", arrivalTime: Date().addingTimeInterval(Double($0 + 1) * 60))
+            CTAArrival(id: "train-\($0)", route: "red", destination: "Howard", arrivalTime: Date().addingTimeInterval(Double($0 + 1) * 60 - 30), approaching: false, delayed: false, stationName: "", stopDescription: "", directionID: "N")
         }
         func station(_ name: String, _ names: [String]) -> StationArrivals {
-            StationArrivals(station: CTAStation(name: name), directions: names.map {
+            StationArrivals(station: CTAStation(id: name, name: name, latitude: 41, longitude: -87, mapID: "1", stopIDs: ["1"]), directions: names.map {
                 DirectionArrivals(id: "raw-\($0)", name: $0, trains: trains)
             })
         }
@@ -34,7 +26,7 @@ struct FileLogger { static let shared = FileLogger(); func log(_ text: String) {
         let text = String(decoding: payload, as: UTF8.self)
         precondition(text.contains("P\tNorth\tGrand\t0.7"))
         precondition(text.contains("P\tNorth\tChicago\t1.2"))
-        precondition(text.components(separatedBy: "\nA\t").count - 1 == 12)
+        precondition(text.components(separatedBy: "\nA\t").count - 1 == 24)
         precondition(payload.count <= 2048)
         precondition(LiveTransitFormatter.platformPages(from: [grand]).count == 2)
         precondition(LiveTransitFormatter.platformPages(from: [grand, station("Loop", ["Clockwise"])]).count == 3)
@@ -44,6 +36,6 @@ struct FileLogger { static let shared = FileLogger(); func log(_ text: String) {
         do { _ = try LiveTransitFormatter.payload(from: []); preconditionFailure("Empty pages must fail") }
         catch LiveTransitError.noDirections {}
         if CommandLine.arguments.count > 1 { try payload.write(to: URL(fileURLWithPath: CommandLine.arguments[1])) }
-        print("PASS station-major order, 1-4 pages, three arrivals, normalized directions, bounded payload (\(payload.count) bytes)")
+        print("PASS station-major order, 1-4 pages, up to nine arrivals per platform, normalized directions, bounded payload (\(payload.count) bytes)")
     }
 }

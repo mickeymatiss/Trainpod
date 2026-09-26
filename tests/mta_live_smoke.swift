@@ -1,7 +1,6 @@
 import Foundation
 import CoreLocation
 
-enum LiveTransitError: Error { case noDirections, payloadTooLarge, platformCapacityExceeded }
 @main struct Smoke {
     @MainActor static func main() async throws {
         // Public test coordinate at Times Square, independent of the user's location.

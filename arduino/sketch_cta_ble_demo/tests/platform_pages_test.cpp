@@ -35,10 +35,10 @@ int main(int argc, char** argv) {
   ArrivalBoard legacy;
   assert(decodeArrivalPayload(complete("TP2\nGrand\nP\tNorth\nP\tSouth\n"),legacy)==ArrivalPayloadResult::valid);
   assert(legacy.platformCount==2 && legacy.platforms[1].stationName=="Grand");
-  assert(legacy.platforms[0].distanceMiles.empty());
+  assert(legacy.platforms[0].distanceValue.empty());
   ArrivalBoard distances;
   assert(decodeArrivalPayload(complete("TP2\nGrand\nP\tNorth\tGrand\t0.0\nP\tSouth\tGrand\t\n"),distances)==ArrivalPayloadResult::valid);
-  assert(distances.platforms[0].distanceMiles=="0.0" && distances.platforms[1].distanceMiles.empty());
+  assert(distances.platforms[0].distanceValue=="0.0" && distances.platforms[1].distanceValue.empty());
   for(const auto& bad : {"-1.0", "nan", "1,2", "1.23", "10000.0"}) {
     assert(decodeArrivalPayload(complete(std::string("TP2\nGrand\nP\tNorth\tGrand\t")+bad+"\n"),distances)==ArrivalPayloadResult::invalid);
     assert(distances.platformCount==2);
@@ -55,8 +55,8 @@ int main(int argc, char** argv) {
     assert(decodeArrivalPayload(data,phone)==ArrivalPayloadResult::valid);
     assert(phone.platformCount==4);
     assert(phone.platforms[0].stationName=="Grand" && phone.platforms[2].stationName=="Chicago");
-    assert(phone.platforms[0].distanceMiles=="0.7" && phone.platforms[2].distanceMiles=="1.2");
-    for(size_t i=0;i<4;++i) assert(phone.platforms[i].arrivalCount==3);
+    assert(phone.platforms[0].distanceValue=="0.7" && phone.platforms[2].distanceValue=="1.2");
+    for(size_t i=0;i<4;++i) assert(phone.platforms[i].arrivalCount==6);
     // Exercise the unchanged BLE framing with the actual Swift payload.
     const size_t chunkSize=20, chunks=(data.size()+chunkSize-1)/chunkSize;
     uint8_t header[19]; PayloadDelivery::envelope(header,2,(uint64_t(1)<<32)|2);

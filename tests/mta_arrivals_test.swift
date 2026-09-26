@@ -1,9 +1,5 @@
 import Foundation
 
-// Only application diagnostics/errors are stubbed; production parser, selector and formatter are compiled below.
-final class FileLogger { static let shared = FileLogger(); func log(_ text: String) {} }
-enum LiveTransitError: Error { case noDirections, payloadTooLarge, platformCapacityExceeded }
-
 @main struct Tests {
     static func v(_ n: UInt64) -> [UInt8] {
         var n = n, bytes: [UInt8] = []
@@ -79,7 +75,7 @@ enum LiveTransitError: Error { case noDirections, payloadTooLarge, platformCapac
         assert(eastWest[0].directions.map(\.name) == ["Eastbound", "Westbound"])
         assert(eastWest[0].directions[0].trains.map(\.route) == ["L", "7"])
         let eastWestText = String(decoding: try LiveTransitFormatter.payload(from: eastWest), as: UTF8.self)
-        assert(eastWestText.contains("P\tEastbound\t") && eastWestText.contains("P\tWestbound\t"))
+        assert(eastWestText.contains("P\tEast\t") && eastWestText.contains("P\tWest\t"))
         let unknown = MTAClient.nextTrains(for: [stations[0]], predictions: [
             .init(tripID: "unknown", route: "X", stopID: "A01", time: now.addingTimeInterval(60))
         ], now: now)
@@ -94,7 +90,7 @@ enum LiveTransitError: Error { case noDirections, payloadTooLarge, platformCapac
         let cta = StationArrivals(station: ctaStation, directions: [DirectionArrivals(id: "N", name: "North", trains: [first[0]])])
         let ctaPayload = String(decoding: try LiveTransitFormatter.payload(from: [cta]), as: UTF8.self)
         assert(ctaPayload.contains("A\tGreen\t009B3A\t"))
-        // App retains nine unique trains in time order, while BLE keeps two.
+        // App retains nine unique trains in time order, while BLE keeps nine per platform.
         let many = (1...12).reversed().map { index in
             MTAGTFSRealtime.Prediction(tripID: "trip-\(index)", route: "G", stopID: "A01N",
                 time: now.addingTimeInterval(Double(index * 60)))
