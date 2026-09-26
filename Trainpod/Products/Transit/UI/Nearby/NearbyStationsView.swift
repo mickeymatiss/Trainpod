@@ -360,7 +360,7 @@ private struct DirectionArrivalsView: View {
         var groups: [TrainLineGroup] = []
 
         for train in visibleTrains {
-            let eta = max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up)))
+            let eta = NearbyArrivalETA(train)
 
             if let index = groups.firstIndex(where: { $0.route == train.route }) {
                 groups[index].etas.append(eta)
@@ -397,7 +397,7 @@ private struct CompactArrivalsView: View {
 
 private struct TrainLineGroup: Identifiable {
     let route: String
-    var etas: [Int]
+    var etas: [NearbyArrivalETA]
     var displayName: String? = nil
     var displayColor: String? = nil
 
@@ -412,8 +412,8 @@ private struct TrainLineGroupView: View {
             RouteBadge(route: group.route, displayName: group.displayName, displayColor: group.displayColor)
 
             HStack(spacing: 12) {
-                ForEach(group.etas, id: \.self) { eta in
-                    Text("\(eta) min")
+                ForEach(group.etas) { eta in
+                    Text("\(eta.minutes) min")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

@@ -153,6 +153,21 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `fix(display): preserve compound direction labels [F11]`.
 - **Rollback:** revert this pure helper extraction/correction and its two call-site substitutions; no wire compatibility change.
 
+## Pass 7A — F14
+
+**PASS**
+
+- **Files changed:** NearbyStationsView.swift, new NearbyArrivalETA.swift, tests/nearby_arrival_identity_test.swift, test registration and reports.
+- **Behavioral problem:** equal ETA values were identical SwiftUI row IDs.
+- **Characterization:** two distinct existing arrival IDs both display 5 minutes; both remain distinct and keep their IDs when they become 4 minutes. Past/whole/fractional minute rounding also checked.
+- **Production change:** carry the existing CTAArrival.id alongside its computed minutes and use Identifiable rows. No sorting, grouping, content or protocol changes.
+- **Targeted tests:** nearby_arrival_identity_test PASS; old numeric IDs demonstrably collide in the fixture.
+- **Broader tests:** 24 host PASS (11 Swift, 13 C++), one compiled-only, one manual; normal Xcode simulator build PASS.
+- **Manual verification required:** none for identity mapping; optional equal-ETA UI visual smoke. Host tests do not render SwiftUI pixels.
+- **Known remaining limitation:** relies on the existing arrival model's identity quality; does not redesign provider IDs.
+- **Commit message:** fix(ui): use stable arrival row identity [F14].
+- **Rollback:** local projection, view substitutions and test; no cross-platform dependency.
+
 ## Campaign progress
 
 F01–F05 and F09–F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
@@ -175,7 +190,7 @@ F01–F05 and F09–F12 have been implemented. Subsequent passes are not yet eva
 
 | 5 | F12 | `fe53a58` | Deadline + refresh flow PASS | 22 host PASS; ESP32-C6 compile PASS | Optional F12-M1 wake | PASS | Yes, local deadline state |
 
-| 6 | F11 | See delivered commit ID | Display label fixtures PASS (red before fix) | 23 host PASS; ESP32-C6 compile PASS | F11-M1 visual label | PASS — MANUAL VERIFICATION REQUIRED | Yes, display-only helper |
+| 6 | F11 | `27fc013` | Display label fixtures PASS (red before fix) | 23 host PASS; ESP32-C6 compile PASS | F11-M1 visual label | PASS — MANUAL VERIFICATION REQUIRED | Yes, display-only helper |
 
 ## Deliberately unchanged
 
