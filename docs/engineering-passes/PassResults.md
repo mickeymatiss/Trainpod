@@ -235,3 +235,19 @@ Remaining limitations are recorded under each implemented pass: host continuatio
 - **Known limitation:** historical firmware notes remain explicitly labelled history; documentation does not establish hardware success or fix F08 partial-save semantics.
 - **Commit message:** cleanup(docs): align architecture and verification notes [C1].
 - **Rollback:** documentation-only commit; no runtime dependency.
+
+## Pass 8B — C2 host runner output
+
+**PASS**
+
+- **Finding:** C2/F29, opaque distinctions between compilation, execution and manual work.
+- **Files changed:** tests/run_tests.py and this report.
+- **Behavioral problem:** none; reporting obscured what a green run actually covered.
+- **Characterization used:** saved pre-change results.json, then exact structural equality with post-change results including every compiler command, argument and status. No test semantics or fixtures changed.
+- **Production change:** none. Added per-harness presence/run messages, compiled/executed totals, named passed/compiled-only/manual/failed lists, missing optional registrations, and explicit separate Nearby/theme harness inventory. Manual hardware checks remain labelled manual.
+- **Targeted checks:** before/after JSON equality PASS; inspected summary: 26 registered present, 25 compiled, 24 executed/passed, 1 compiled-only, 1 manual; 2 separate harnesses not counted as run.
+- **Broader tests:** 24 host PASS before/after; unchanged command order, timeouts, result JSON schema and exit criteria. No native rebuild needed for reporting-only Python changes.
+- **Manual verification required:** none added.
+- **Known limitation:** separate harnesses require their own commands; the historical manual renderer remains manual. Missing optional entries are reported, not turned into new failures.
+- **Commit message:** cleanup(tests): report host harness execution clearly [C2].
+- **Rollback:** runner-output/report-only commit, independent of production behavior.
