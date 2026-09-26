@@ -48,16 +48,33 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `reliability(ble): allow notification startup retry [F02]`.
 - **Rollback:** independently revert the local guard/reset changes; no new dependency on the F01 helper was introduced.
 
+## Pass 1C — F03
+
+**PASS — MANUAL VERIFICATION REQUIRED**
+
+- **Files changed:** `BluetoothService.swift` and pass/aggregate reports.
+- **Behavioral problem:** a late A connect/disconnect callback could reset B's clock-sync flags/task, diagnostic session, or connection-pending bookkeeping before ownership was checked.
+- **Characterization used:** bounded source event-sequence trace: select A → replace with B → A connect callback takes the rejection branch before clock/session/pending changes; A disconnect returns before session logging/clock mutation; B callbacks retain the original bookkeeping. The reconnect experiment first validates its own retained object through `handleConnected`, then follows the existing connected-state action. This trace is static evidence, not simulated OS callback execution.
+- **Production change:** move only the identified bookkeeping behind existing ownership validation. Connect's adjacent MainActor blocks become one synchronous callback block so validation precedes those effects. No delegate framework or new ownership type. The F01 retirement gate still observes an old peer's disconnect before the active-peer guard, because clearing that peer's retirement marker is intentional. The raw disconnect timestamp diagnostic remains a global lifecycle observation, with no active-session/clock mutation.
+- **Targeted verification:** reviewed the A/B event trace and diff; actual iOS target build PASS. Existing pure wait ownership test PASS. No CoreBluetooth mock was introduced; that wait test does not prove these delegate methods execute correctly on a device.
+- **Broader tests:** pre-change F02 suite 18 PASS; post-change all 18 PASS, one compiled-only and one manual. Xcode Debug simulator build PASS.
+- **Manual required:** F03-M1, select A then B and deliver/observe a late A connect or disconnect; B's diagnostic session, clock sync, pending connection and transport readiness must remain intact. Verify normal B reconnect and the opt-in reconnect experiment still work. Combine with two-device theme checks later.
+- **Known limitation:** delayed real CoreBluetooth A/B callbacks and the reconnect experiment have not been physically exercised. The change preserves the existing identifier-based runtime guard; it does not redesign connection-generation identity.
+- **Commit message:** `reliability(ble): guard stale peripheral bookkeeping [F03]`.
+- **Rollback:** one local callback-ordering change, independently revertible; unrelated delegates are untouched.
+
 ## Campaign progress
 
-F01 and F02 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01, F02 and F03 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1A | F01 | `d022b55` | BLE wait/retirement/ownership: PASS | 18 host PASS; Xcode PASS | F01-M1–M4 | PASS — MANUAL VERIFICATION REQUIRED | Yes, independent commit |
 
-| 1B | F02 | See delivered commit ID | State trace + Xcode PASS; callbacks manual | 18 host PASS | F02-M1–M5 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local guard/reset changes |
+| 1B | F02 | `faa100f` | State trace + Xcode PASS; callbacks manual | 18 host PASS | F02-M1–M5 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local guard/reset changes |
+
+| 1C | F03 | See delivered commit ID | A/B source trace, ownership harness, Xcode PASS | 18 host PASS | F03-M1 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local ordering change |
 
 ## Deliberately unchanged
 
-F03, F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

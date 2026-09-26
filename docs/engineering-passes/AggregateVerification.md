@@ -1,8 +1,10 @@
-# Aggregate verification — through F02
+# Aggregate verification — through F03
 
-This is an interim aggregate, not completion of the whole campaign. F01 and F02 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
+This is an interim aggregate, not completion of the whole campaign. F01, F02 and F03 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
 
 F02 additionally passed the normal Xcode simulator build and all 18 host executables on a clean cache. Its initial symlinked-cache run failed during module loading; the successful run used an independent cache, with unchanged sources/fixtures. F02 callback transitions remain manual obligations.
+
+F03 passed all 18 host executables and the normal Xcode simulator build. Its actual A/B callback sequence remains manual; source tracing and pure ownership tests are not CoreBluetooth integration coverage.
 
 ## Host suite
 
@@ -70,4 +72,4 @@ Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
 
 ## Rollback and remaining verification
 
-F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F02-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.
+F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F03-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.

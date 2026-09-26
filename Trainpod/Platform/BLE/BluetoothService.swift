@@ -811,26 +811,27 @@ extension BluetoothService: CBCentralManagerDelegate {
 
     nonisolated func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         let timestamp = Date()
+        // The reconnect experiment owns its retained peer separately. Its handler
+        // validates that peer before any live-session bookkeeping is changed.
         MainActor.assumeIsolated {
+            let testConnection = backgroundReconnect.handleConnected(peripheral, at: timestamp)
+            if testConnection {
+                self.peripheral = peripheral
+            } else {
+                guard BackgroundReconnectManager.active == nil else { return }
+                guard bindingAllowsConnection, autoScanEnabled, self.peripheral?.identifier == peripheral.identifier else {
+                    central.cancelPeripheralConnection(peripheral); return
+                }
+            }
             clockSyncTask?.cancel(); clockSyncStarted = false; clockSyncInProgress = false
             newDiagnosticSession()
             PhoneDiagnosticLog.shared.record("BLE_CONNECTED", sessionId: diagnosticSessionId)
             connectionRequestPending = false
             log("[E2E] BLE connected; backgrounded=\(UIApplication.shared.applicationState == .background)")
             FileLogger.shared.log("[BLE] Connected role=\(role) backgrounded=\(UIApplication.shared.applicationState == .background)")
-        }
-        // queue:nil delivers on the main queue; persist evidence inside this callback.
-        if MainActor.assumeIsolated({
-            if backgroundReconnect.handleConnected(peripheral, at: timestamp) {
-                self.peripheral = peripheral
+            if testConnection {
                 setConnectionState(.connected)
-                return true
-            }
-            return BackgroundReconnectManager.active != nil
-        }) { return }
-        MainActor.assumeIsolated {
-            guard bindingAllowsConnection, autoScanEnabled, self.peripheral?.identifier == peripheral.identifier else {
-                central.cancelPeripheralConnection(peripheral); return
+                return
             }
             diagnostic("connected id=\(peripheral.identifier) backgrounded=\(UIApplication.shared.applicationState == .background)")
             resumeDataPath(peripheral)
@@ -885,11 +886,11 @@ extension BluetoothService: CBCentralManagerDelegate {
         // CoreBluetooth guarantees no more peripheral delegate calls after this
         // disconnect boundary; GATT handles are invalidated before reconnect.
         writeRetirement.disconnected(peripheral)
+        guard self.peripheral?.identifier == peripheral.identifier else { return }
         PhoneDiagnosticLog.shared.record("BLE_DISCONNECTED", sessionId: diagnosticSessionId, value1: Int64((error as NSError?)?.code ?? 0))
         clockSyncTask?.cancel(); clockSyncStarted = false; clockSyncInProgress = false
         FileLogger.shared.log("[BLE] Disconnected role=\(role) code=\((error as NSError?)?.code ?? 0) reconnecting=\(isReconnecting)")
         diagnostic("disconnected id=\(peripheral.identifier) error=\(error?.localizedDescription ?? "none")")
-        guard self.peripheral?.identifier == peripheral.identifier else { return }
         retainKnown(peripheral)
         connectionRequestPending = isReconnecting
         dataPathStarted = false
