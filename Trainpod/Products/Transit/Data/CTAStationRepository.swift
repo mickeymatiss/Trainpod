@@ -19,16 +19,22 @@ struct CTAStationRepository {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private let fileManager: FileManager
+    private let session: URLSession
 
-    init(fileManager: FileManager = .default) {
+    init(fileManager: FileManager = .default, session: URLSession = .shared) {
         self.fileManager = fileManager
+        self.session = session
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
     func loadStations() async throws -> [CTAStation] {
-        if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty,
-           cachedStations.allSatisfy({ $0.stopDirections != nil }) {
-            return cachedStations
+        do {
+            if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty,
+               cachedStations.allSatisfy({ $0.stopDirections != nil }) {
+                return cachedStations
+            }
+        } catch {
+            FileLogger.shared.log("[CACHE] CTA metadata cache unreadable; fetching metadata")
         }
 
         let stations = try await fetchStations()
@@ -36,7 +42,8 @@ struct CTAStationRepository {
             throw CTAStationRepositoryError.noStations
         }
 
-        try saveStations(stations)
+        do { try saveStations(stations) }
+        catch { FileLogger.shared.log("[CACHE] CTA metadata save failed; using fetched metadata") }
         return stations
     }
 
@@ -89,7 +96,7 @@ struct CTAStationRepository {
             throw CTAStationRepositoryError.invalidURL
         }
 
-        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 6))
+        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 6))
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             FileLogger.shared.log("[API] Invalid metadata response HTTP=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
             throw CTAStationRepositoryError.invalidResponse

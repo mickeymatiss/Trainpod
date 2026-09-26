@@ -63,9 +63,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `reliability(ble): guard stale peripheral bookkeeping [F03]`.
 - **Rollback:** one local callback-ordering change, independently revertible; unrelated delegates are untouched.
 
+## Pass 2 — F04
+
+**PASS**
+
+- **Files changed:** `CTAStationRepository.swift`, new `tests/cta_cache_test.swift`, one harness registration in `tests/run_tests.py`, and pass/aggregate reports.
+- **Behavioral problem:** JSON/read errors prevented a fresh metadata fetch; persistence errors discarded successfully fetched mandatory CTA direction metadata.
+- **Characterization:** deterministic HTTP fixture through URLProtocol plus the existing FileManager injection, with real temporary cache files. The test first failed on corrupt JSON blocking network and simulated out-of-space save discarding good results. After the fix it passes valid cache, missing cache, corrupt cache, network success/save success, network success/save failure, valid cache while upstream is unavailable, missing required direction mapping, and corrupt cache plus network failure. No live requests or user cache files are touched.
+- **Production change:** catch cache-read errors before the unchanged network path, and catch cache-save errors after a valid nonempty fetched result. Log those two cache failures. A defaulted URLSession parameter supplies the focused HTTP test seam; ordinary callers still use shared URLSession, the same URL, timeout and decoding/grouping.
+- **Targeted tests:** `cta_cache_test` red before recovery changes, green afterward. Actual repository code, not a parallel cache-policy implementation.
+- **Broader tests:** before 18 host PASS; after 19 host PASS, one compiled-only, one manual. Formatter, realtime validation and shared protocol fixtures PASS. Xcode Debug simulator build PASS.
+- **Manual verification required:** none for deterministic local cache semantics; an ordinary CTA refresh can be included in the final BLE smoke session without being represented as missing unit coverage.
+- **Known remaining limitation:** usable cache remains authoritative with no fetch/age change; thus “failed network + usable cache” is represented by an unavailable upstream that is never called. Syntactically valid but semantically incorrect/non-nil direction dictionaries can still poison serving; validating or refreshing such metadata would change existing correctness/freshness policy and is not included. If required metadata cannot be recovered from either source, the original serving failure remains appropriate.
+- **Commit message:** `reliability(cta): tolerate recoverable cache failures [F04]`.
+- **Rollback:** independently revert repository recovery/seam, its harness and registration. No fallback policy, provider, formatter or firmware changes.
+
 ## Campaign progress
 
-F01, F02 and F03 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F04 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -73,8 +88,10 @@ F01, F02 and F03 have been implemented. Subsequent passes are not yet evaluated;
 
 | 1B | F02 | `faa100f` | State trace + Xcode PASS; callbacks manual | 18 host PASS | F02-M1–M5 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local guard/reset changes |
 
-| 1C | F03 | See delivered commit ID | A/B source trace, ownership harness, Xcode PASS | 18 host PASS | F03-M1 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local ordering change |
+| 1C | F03 | `5993694` | A/B source trace, ownership harness, Xcode PASS | 18 host PASS | F03-M1 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local ordering change |
+
+| 2 | F04 | See delivered commit ID | CTA cache fixtures: PASS (red before fix) | 19 host PASS; Xcode PASS | No | PASS | Yes, isolated cache policy |
 
 ## Deliberately unchanged
 
-F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
