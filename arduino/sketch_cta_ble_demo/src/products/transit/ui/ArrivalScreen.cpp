@@ -17,20 +17,10 @@
 #include "fonts/ArrivalItalic18.h"
 #include "fonts/ArrivalItalic12.h"
 #include "fonts/ArrivalItalic9.h"
-#include <cctype>
+#include "DisplayDirection.h"
 
 namespace {
 uint16_t etaColor(uint8_t opacity) { return pallete::arrivalBadgeText(opacity); }
-std::string displayDirection(const std::string& value) {
-  std::string lower=value;
-  for(char& c:lower) c=char(std::tolower(static_cast<unsigned char>(c)));
-  if(lower.find("east")!=std::string::npos) return "East";
-  if(lower.find("west")!=std::string::npos) return "West";
-  if(lower.find("south")!=std::string::npos) return "South";
-  if(lower.find("north")!=std::string::npos) return "North";
-  constexpr const char* prefix="Platform ";
-  return value.rfind(prefix,0)==0 ? value.substr(9) : value;
-}
 std::string routeAbbreviation(const std::string& label) {
   if (label == "Green" || label == "GRN") return "GRN";
   if (label == "Blue" || label == "BLU") return "BLU";
@@ -162,7 +152,7 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
     for(int row=0;row<h;++row)
       std::copy_n(pixels+(y+row)*width+x,w,transitionShell.data()+row*w);
     if(group==0) {
-      if(fields&2) text(displayDirection(platform.direction),width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
+      if(fields&2) text(TransitDisplay::displayDirection(platform.direction),width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
       if(fields&1) text(platform.stationName,18,23,width-129,pallete::primaryText(),1,false,&BarlowCondensedSemiBold28);
     } else if(group==footerGroup()) {
       drawDistanceGauge(platform.distanceValue,platform.distanceUnit);
@@ -389,7 +379,7 @@ void ArrivalScreen::draw(uint32_t now) {
   if(full) drawInstrumentShell();
   if (full || renderedPlatform.stationName!=platform.stationName || renderedPlatform.direction!=platform.direction) {
     surface().fillRect(8,1,width-16,29,pallete::background());
-    text(displayDirection(platform.direction), width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
+    text(TransitDisplay::displayDirection(platform.direction), width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
     text(platform.stationName, padding+10, 23, width-129, pallete::primaryText(), 1, false, &BarlowCondensedSemiBold28);
     surface().drawFastHLine(padding,31,width-padding*2,pallete::detail());
     if (state.hasData) DebugLog.printf("[UI] Platform %u/%u: %s / %s\n",

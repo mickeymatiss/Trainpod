@@ -1,4 +1,4 @@
-# Aggregate verification — through F12
+# Aggregate verification — through F11
 
 This is an interim aggregate, not completion of the whole campaign. F01, F02 and F03 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
 
@@ -15,6 +15,8 @@ Latest after F09: **20 host executables PASS** (nine Swift, eleven C++), plus Xc
 Latest after F10: **21 host executables PASS** (ten Swift, eleven C++), plus Xcode simulator build PASS. Seven formatted report fixtures inspected; missing render completion is explicitly unknown.
 
 Latest after F12: **22 host executables PASS** (ten Swift, twelve C++). New deadline horizon/wake/cooldown fixtures PASS.
+
+Latest after F11: **23 host executables PASS** (ten Swift, thirteen C++). Compound display labels characterized red/green; ESP32-C6 target compile PASS again after this change. Visual fit remains manual.
 
 ## Host suite
 
@@ -35,6 +37,7 @@ Before F01: 17 executable harnesses PASS. After F01: **18 PASS**, **one compiled
 | mta_live_smoke | COMPILED (NOT RUN) |
 | firmware_arrival_screen_test | PASS |
 | firmware_button_navigation_test | PASS |
+| firmware_display_direction_test | PASS |
 | firmware_eta_fade_test | PASS |
 | eta_render_test | MANUAL — legacy harness retained |
 | firmware_mta_arrivals_contract_test | PASS |
@@ -90,4 +93,4 @@ Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
 
 ## Rollback and remaining verification
 
-F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F12-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.
+F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F11-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.

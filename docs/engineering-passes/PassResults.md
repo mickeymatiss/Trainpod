@@ -138,9 +138,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `fix(firmware): rearm long-lived refresh deadline [F12]`.
 - **Rollback:** two local wake deadline assignments and the pure helper/test; no iOS or protocol dependency.
 
+## Pass 6 — F11
+
+**PASS — MANUAL VERIFICATION REQUIRED**
+
+- **Files changed:** `ArrivalScreen.cpp`, new pure `DisplayDirection.h`, new `tests/display_direction_test.cpp`, and reports.
+- **Behavioral problem:** the East/West substring checks consumed compound directions before their North/South component could be preserved.
+- **Characterization:** move the existing pure function into a header without changing behavior, then run the new fixture: `N.East` produced `East`, failing the expected output. The desired `N. East`, `N. West`, `S. East`, `S. West` convention is already established by the iOS formatter. Fixed fixtures cover all cardinals, all four compounds with/without period-space, full spellings, case/bound/hyphen variants, existing platform-prefix fallback and unrelated text. `Main East` and `Northampton East` preserve old behavior rather than becoming false compounds; bare `NE` retains its previous fallback.
+- **Production change:** four compound-prefix checks precede unchanged cardinal substring/fallback behavior. Only the two renderer call sites use the extracted pure helper. No direction identity, grouping, station selection, parser or serialized-byte changes.
+- **Targeted tests:** new display-direction harness red before / PASS after; existing arrival/page/render-policy host checks PASS.
+- **Broader tests:** before 22 host PASS; after 23 host PASS (ten Swift, thirteen C++), one compiled-only, one manual. ESP32-C6 target compile PASS, no upload/config changes. Shared protocol fixtures unchanged.
+- **Manual required:** F11-M1 visually check one available compound label in standard/compact display to confirm fit and glyph rendering; no physical device session was performed. Can be combined with page/navigation smoke.
+- **Known limitation:** the host fixture proves display text, not pixels. Existing broad cardinal substring behavior and unknown-label fallback are intentionally preserved.
+- **Commit message:** `fix(display): preserve compound direction labels [F11]`.
+- **Rollback:** revert this pure helper extraction/correction and its two call-site substitutions; no wire compatibility change.
+
 ## Campaign progress
 
-F01–F05, F09, F10 and F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F05 and F09–F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -158,8 +173,10 @@ F01–F05, F09, F10 and F12 have been implemented. Subsequent passes are not yet
 
 | 4 | F10 | `203159c` | Render evidence fixtures + diagnostic suite PASS | 21 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, report only |
 
-| 5 | F12 | See delivered commit ID | Deadline + refresh flow PASS | 22 host PASS; ESP32-C6 compile PASS | Optional F12-M1 wake | PASS | Yes, local deadline state |
+| 5 | F12 | `fe53a58` | Deadline + refresh flow PASS | 22 host PASS; ESP32-C6 compile PASS | Optional F12-M1 wake | PASS | Yes, local deadline state |
+
+| 6 | F11 | See delivered commit ID | Display label fixtures PASS (red before fix) | 23 host PASS; ESP32-C6 compile PASS | F11-M1 visual label | PASS — MANUAL VERIFICATION REQUIRED | Yes, display-only helper |
 
 ## Deliberately unchanged
 
-F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
