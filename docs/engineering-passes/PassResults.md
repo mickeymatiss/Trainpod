@@ -1,76 +1,46 @@
-# KeyTrain bounded engineering campaign — paused at F01
+# KeyTrain bounded engineering campaign
 
-This is an interim report, not a completed campaign. No production code or existing test has been changed. The next pass has not begun.
+## Baseline and rollback
 
-## Baseline and rollback boundary
-
-The working prototype is release 1, `8fc1dad`. The original checkout contained uncommitted characterization work. An isolated local checkout on `engineering/bounded-campaign` preserves that work in prerequisite commit `297bcc5` (`test: preserve pre-campaign characterization baseline`). This is a snapshot of pre-existing work, not an implementation pass. The original checkout and main remain untouched; nothing has been pushed.
+Work is isolated on `engineering/bounded-campaign`. Original checkout and main remain untouched; nothing is pushed. Release 1 is `8fc1dad`. Prerequisite commit `297bcc5` preserves the previously uncommitted characterization tests; it is not an implementation pass. `007150c` records the initial F01 investigation and policy question. The user subsequently authorized narrowly retiring a connection when cancellation intersects an unresolved response write.
 
 ## Pass 1A — F01
 
-**Result: BLOCKED** — awaiting a recovery-policy clarification before production work.
+**PASS — MANUAL VERIFICATION REQUIRED**
 
-- **Files changed:** this report, `AggregateVerification.md`, and `F01-continuation-probe.swift` under `docs/engineering-passes/`. No production changes.
-- **Behavioral problem:** `BluetoothService.writeChunk` stores checked continuations for ATT response and no-response readiness. Neither wait registers a cancellation handler. The refresh deadline cancels `sendTask`; this does not itself resume either continuation. `BluetoothService.write` retains `writeInProgress`, and `MessageBridge.send` retains `sending`, until their awaits exit and their `defer`s run.
-- **Characterization added/used:** a small, deterministic Swift runtime probe confirms that cancellation alone leaves a checked continuation suspended and that explicit failure releases it and its enclosing `defer`. It uses no CoreBluetooth mocks. It is an experiment on the underlying Swift primitive, **not** production regression coverage or a six-case BLE lifecycle test. Existing diagnostic tests establish ACK matching, not transport continuation cancellation.
-- **Production change:** none. A naive cancellation handler clearing the continuation was deliberately not installed.
-- **Targeted tests:** compiled the probe with `swiftc -parse-as-library`; both observations passed. The first compilation omitted `-parse-as-library` and failed; the corrected invocation compiled and ran successfully.
-- **Broader tests:** all 17 executable baseline host harnesses passed. MTA live smoke compiled only; legacy ETA renderer remained manual. Normal Debug Xcode simulator build succeeded without modifying signing or project configuration.
-- **Manual verification required:** any eventual F01 fix must exercise cancellation during both write modes, late completion, reconnect recovery if used, and a subsequent send on real hardware. Nothing here establishes hardware success.
-- **Known remaining limitation:** F01 remains present. No exactly-once completion or forward-progress fix has been claimed.
-- **Commit message:** `docs(ble): record cancellation recovery decision boundary [F01]`. The exact identifier is included in the delivered report after committing.
+- **Finding:** cancelled transport waits could leave `BluetoothService.writeInProgress` and `MessageBridge.sending` occupied indefinitely. Releasing an unresolved response write without retiring its connection would allow an old ATT callback to satisfy a later write.
+- **Files changed:** `Trainpod/Platform/BLE/BluetoothService.swift`, new `Trainpod/Platform/BLE/BLEWriteWait.swift`, new `tests/ble_write_wait_test.swift`, the harness registration in `tests/run_tests.py`, and these pass/verification reports.
+- **Characterization:** the preserved runtime probe first confirmed raw continuation cancellation does not execute enclosing cleanup. The new test compiles the production wait and retirement gate directly; plain object identities stand in for callback ownership, without a fake CoreBluetooth framework. Tests cover normal completion, explicit failure, disconnect, supersession, duplicate completion, cancellation before submission, cancellation while waiting, resolution-before-retirement ordering, completion winning a cancellation race, unrelated disconnect, late old callback ownership after the disconnect barrier, successful subsequent wait, and no-response readiness cancellation/reuse.
+- **Production change:** each suspension has a separate MainActor-owned continuation. Cancellation completes only that wait, exactly once. A cancelled outstanding response write clears its pending slot and retires its connection in the same actor turn before released sender cleanup can permit another write. The retired peer is blocked in send/readiness/discovery paths until its disconnect callback. Existing reconnect and GATT discovery remain authoritative. Readiness-only cancellation clears its wait without retiring the connection. Already completed or never-submitted writes do not trigger retirement.
+- **Targeted tests:** `ble_write_wait_test` PASS. Existing runtime probe previously PASS; not counted as production coverage.
+- **Broader tests before:** 17/17 host executables PASS. **After:** 18/18 PASS (seven Swift, eleven C++); public MTA live smoke compiled only, legacy ETA renderer manual. Debug Xcode generic iOS Simulator build PASS, with unchanged project/signing settings. Shared TP2/P1 goldens PASS on both platforms.
+- **Diff review:** no MessageBridge, request coordinator, firmware, payload, framing, MTU/chunk, resend or retry policy changes. Existing peripheral-ownership checks remain; response completion additionally uses the wait's original peripheral/characteristic identities. Registration of the new harness is the only runner change.
+- **Manual verification:** required; see scenario F01-M1 through F01-M4 below.
+- **Remaining limitation:** host tests exercise KeyTrain-owned continuation/ownership state and the disconnect gate, not OS callback delivery, actual radio disconnection, or physical reconnection. Recovery uses the existing reconnect path and does not guarantee service if the peripheral remains unavailable. No new retry or automatic resend is introduced.
+- **Commit message:** `reliability(ble): resolve cancelled pending writes [F01]`. Exact identifier is recorded in the delivered report and final campaign table after commit.
+- **Rollback:** revert this one implementation commit to restore prior behavior and remove its harness registration; the earlier characterization baseline remains independently intact.
 
-### Why a policy decision is needed
+### Why the disconnect barrier is sufficient within the documented contract
 
-`didWriteValueFor` receives a peripheral and characteristic, but no application write identifier. Its current guard checks the active peripheral, pending characteristic and presence of a pending continuation.
+Response delegate handling remains synchronous on the main queue. Before disconnect, the retired gate and cleared pending slot reject the abandoned completion. After disconnect, CoreBluetooth invalidates services and characteristics; the next wait must match its newly discovered characteristic object. Apple documents no further peripheral delegate calls after the disconnect callback. See [Apple disconnect contract](https://developer.apple.com/documentation/corebluetooth/cbcentralmanagerdelegate/centralmanager(_:didDisconnectPeripheral:error:)) and [nonblocking cancellation](https://developer.apple.com/documentation/corebluetooth/cbcentralmanager/cancelperipheralconnection(_:)). This is an OS contract plus local ownership guards, not an invented application write ID in the callback.
 
-Consider this trace:
+### Manual smoke scenarios for the actual change
 
-1. Write W1 is submitted on peripheral P / characteristic C.
-2. W1 is cancelled; a naive handler clears and resumes its continuation.
-3. W2 starts on the same P / C.
-4. A delayed W1 callback arrives. It satisfies the current guard for W2.
+- **F01-M1 — Normal/repeated refresh:** cold boot, connect, complete several refreshes, and issue a background request. Check normal response writes/ACKs; no cancellation-retirement log should appear. Covers unchanged normal writes and sender release.
+- **F01-M2 — Cancel an outstanding response write:** use a debug breakpoint after a response continuation is installed, cancel the owning task before delivering its completion, then continue. Confirm one cancellation resolution, one retirement request, and no further logical writes before disconnect. Let the existing reconnect/request path run; confirm a subsequent refresh succeeds. Check late old completion cannot mark the new operation complete. Host state tests cover the sequence; real callback timing still needs physical observation.
+- **F01-M3 — Ordinary interruption:** disconnect/reconnect and Bluetooth off/on during a send; verify existing reconnection and a later request. Do not interpret an unavailable peripheral as automatic retry success.
+- **F01-M4 — Non-response cancellation boundaries:** cancel before transport submission, after successful response completion, and while waiting for no-response capacity. The first two must not retire; readiness cancellation must release without a retirement request. A later send must remain possible. Use a debugger to create the readiness boundary if normal traffic never saturates it.
 
-An application operation token can protect a delayed **cancellation handler**, but cannot be recovered from this ATT callback. Keeping a tombstone and waiting for W1's callback can instead recreate the permanent stall when that callback never arrives. No-response readiness is different: it announces capacity rather than completion of a particular write, but that distinction does not solve response-write ownership.
+No hardware checks have been run. These scenarios validate F01 only and will be consolidated with later successful passes.
 
-A practical candidate is to retire the connection when an outstanding response write is cancelled, release the logical sender, and recover through the existing reconnect path with careful callback/connection ownership guards. That adds a cancellation-triggered connection transition. The task explicitly says not to change retry semantics or BLE availability architecture, so this policy has been raised for clarification rather than silently introduced. Connection retirement alone is not yet a verified fix; its stale-callback ordering and resumed-send behavior still need characterization and hardware verification.
+## Campaign progress
 
-**Pending question:** allow connection retirement specifically for a cancelled outstanding response write, using the existing reconnect path, or keep F01 blocked? No answer has been assumed.
-
-### Implementation evidence
-
-- `Trainpod/Platform/BLE/BluetoothService.swift`: continuation fields around 106–109; `write` / `writeChunk` / `resumePendingWrite` around 447–519; response/readiness delegates around 1076–1115.
-- `Trainpod/Products/Transit/BLE/RefreshRequestHandler.swift`: background expiration and 25-second deadline cancel `sendTask` around 135–157.
-- `Trainpod/Platform/Transport/MessageBridge.swift`: `sending = true` and `defer { sending = false }` around 124–125, followed by awaited writes.
-- `arduino/sketch_cta_ble_demo/src/platform/ble/BleSession.cpp`: `abortSession` / `endSession` return when provisioning keeps BLE available, so firmware timeout is not a reliable disconnect escape hatch.
-
-## Remaining passes
-
-The user's sequential gate says not to begin the next pass with unclear behavior. No subsequent implementation pass has begun while F01's recovery policy is unresolved. These are **not** findings that have individually been judged unfixable.
+Only F01 has been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1A | F01 | Documentation/probe only; see delivered commit ID | Runtime cancellation probe, not production lifecycle coverage | Baseline 17 PASS; Xcode build PASS | Required for eventual fix | BLOCKED | Yes: no runtime changes |
-| 1B | F02 | None | Not begun | Baseline only | Subscription/reconnect | BLOCKED | No changes |
-| 1C | F03 | None | Not begun | Baseline only | Device-switch callbacks | BLOCKED | No changes |
-| 2 | F04 | None | Not begun | Baseline only | To determine during pass | BLOCKED | No changes |
-| 3A | F05 | None | Not begun | Baseline only | Two-device themes | BLOCKED | No changes |
-| 3B | F09 | None | Not begun | Baseline only | Export smoke if changed | BLOCKED | No changes |
-| 4 | F10 | None | Not begun | Baseline only | Export wording/evidence if changed | BLOCKED | No changes |
-| 5 | F12 | None | Not begun | Baseline only | Depends on eventual diff | BLOCKED | No changes |
-| 6 | F11 | None | Not begun | Baseline only | Visual label if available | BLOCKED | No changes |
-| 7A | F14 | None | Not begun | Baseline only | Simulator UI if changed | BLOCKED | No changes |
-| 7B | F13 | None | Not begun | Baseline only | Retry policy unresolved by this campaign | BLOCKED | No changes |
-| 8A | C1 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8B | C2 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8C | C3 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8D | C4 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8E | C5 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8F | C6 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
-| 8G | C7 | None | Not begun | Baseline only | Not determined | BLOCKED | No changes |
+| 1A | F01 | See delivered commit ID | BLE wait/retirement/ownership: PASS | 18 host PASS; Xcode PASS | F01-M1–M4 | PASS — MANUAL VERIFICATION REQUIRED | Yes, independent commit |
 
 ## Deliberately unchanged
 
-F01 is unchanged pending the above decision. All other requested passes remain unstarted under the sequential/reliability gates. F06, F08, F15–F19+ and the user's excluded ownership/security, provisioning, renderer, power, provider-policy, protocol and naming changes remain out of scope. F07 (shared location waiters) was identified by the review but is not in the authorized implementation list and remains unchanged.
-
-There is no touched-production manual smoke list yet: no production behavior has changed. An eventual F01 implementation will require its own mapped hardware checks and commit before any later pass begins.
+F02, F03, F04, F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

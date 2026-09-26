@@ -1,18 +1,17 @@
-# Aggregate verification — interim baseline, not campaign completion
+# Aggregate verification — through F01
 
-The campaign is paused before the F01 production change. No subsequent pass has begun. These results establish the preserved baseline; they do not verify the requested fixes.
+This is an interim aggregate, not completion of the whole campaign. F01 is PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
 
-## Complete host suite
+## Host suite
 
-Command: `python3 tests/run_tests.py --output <external-artifact-directory>`.
-
-Result: **17 PASS**, **1 compiled-only**, **1 manual**. The executable total consists of six Swift harnesses and eleven C++ harnesses. Live network execution was not requested or performed. The legacy renderer harness was not run.
+Before F01: 17 executable harnesses PASS. After F01: **18 PASS**, **one compiled-only**, **one manual**. Seven Swift and eleven firmware C++ harnesses executed. The added wait test compiles production state/continuation code directly, not CoreBluetooth mocks.
 
 | Harness | Status |
 | --- | --- |
 | platform_formatter_test | PASS |
 | mta_arrivals_test | PASS |
 | transit_manifest_test | PASS |
+| ble_write_wait_test | PASS |
 | protocol_contract_test | PASS |
 | delivery_diagnostics_test | PASS |
 | realtime_validation_test | PASS |
@@ -30,28 +29,15 @@ Result: **17 PASS**, **1 compiled-only**, **1 manual**. The executable total con
 | firmware_refresh_flow_test | PASS |
 | firmware_transit_buffer_test | PASS |
 
-The complete suite ran before any campaign production changes. No production or existing test changes followed, so no redundant final rerun was performed. A true final aggregate run remains required after the campaign's successful passes.
+Commands used `python3 tests/run_tests.py --output <external-directory>`; all artifacts stayed outside the checkout. The new test was also compiled/run directly before integration. The original raw-continuation experiment is retained as historical evidence and is not part of the passing production-harness count.
 
-## F01 runtime experiment
+## iOS target build
 
-`docs/engineering-passes/F01-continuation-probe.swift` is a standalone Swift language experiment, not a CoreBluetooth mock or a production regression harness. It is deliberately not registered in the existing test runner and is not counted among the 17 passing tests.
-
-```sh
-swiftc -parse-as-library -module-cache-path /tmp/keytrain-f01-cache docs/engineering-passes/F01-continuation-probe.swift -o /tmp/keytrain-f01-probe
-/tmp/keytrain-f01-probe
-```
-
-Observed: task cancellation leaves the checked continuation suspended and the enclosing defer unexecuted; explicitly resuming it with `CancellationError` releases the task and executes cleanup. The six requested end-to-end lifecycle cases are **not yet verified**.
-
-## Xcode
-
-**BUILD SUCCEEDED**, Debug, generic iOS Simulator, both simulator architectures selected by the existing project. Used the installed Xcode via a command-scoped `DEVELOPER_DIR`; did not change `xcode-select`, project configuration, signing settings, or dependencies. The initial sandboxed project-list command could not access simulator services; the authorized build with normal service/cache access succeeded.
+**BUILD SUCCEEDED**, normal Debug generic iOS Simulator build after F01, using the installed Xcode via command-scoped `DEVELOPER_DIR`. Project, signing and dependency settings were unchanged. Existing `bluetoothCentrals` deprecation and App Intents metadata warnings remain unrelated. No simulator UI test or physical BLE success is claimed.
 
 ```sh
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project 'KeyTrain Connect.xcodeproj' -scheme 'KeyTrain Connect' -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath <external-derived-data> build
 ```
-
-This was a compile/build, not a simulator UI execution, phone run, or hardware BLE test.
 
 ## Firmware target
 
@@ -61,7 +47,7 @@ The Arduino IDE bundled CLI, ESP32 core 3.3.11 and RISC-V compiler are installed
 
 The Swift and C++ protocol contract harnesses both passed against the existing shared TP2 fixtures and P1 header. Formatter-generated platform and MTA payloads were also consumed successfully by the firmware harnesses. Production serialization, checksum, capacity, framing and parser code are unchanged. This establishes baseline golden compatibility, not any unimplemented pass.
 
-Protocol fixture SHA-256 values at the verified baseline:
+Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
 
 | File | SHA-256 |
 | --- | --- |
@@ -82,6 +68,4 @@ Protocol fixture SHA-256 values at the verified baseline:
 
 ## Rollback and remaining verification
 
-The F01 record/probe commit changes documentation and an isolated experiment only. It can be reverted without changing runtime behavior. The prerequisite characterization snapshot is a separate commit and should not be mistaken for a production fix.
-
-No manual scenarios can be mapped to changed production code yet. After an approved F01 implementation, cancellation/recovery and subsequent-send smoke checks will be required. Later passes must add their own commit-specific checks. The combined final hardware session and final aggregate run remain outstanding.
+F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F01-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.

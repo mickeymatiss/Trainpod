@@ -103,9 +103,9 @@ final class BluetoothService: NSObject, ObservableObject {
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var writableCharacteristic: CBCharacteristic?
-    private var pendingWriteContinuation: CheckedContinuation<Void, Error>?
-    private var pendingWriteCharacteristic: CBCharacteristic?
-    private var pendingWithoutResponseContinuation: CheckedContinuation<Void, Error>?
+    private var pendingWriteWait: BLEWriteWait?
+    private var pendingWithoutResponseWait: BLEWriteWait?
+    private var writeRetirement = BLEWriteRetirement()
     private var writeInProgress = false
     private var allDebugMessages: [DebugMessage] = []
     private var autoScanEnabled = true
@@ -168,7 +168,7 @@ final class BluetoothService: NSObject, ObservableObject {
 
     var canSend: Bool {
         guard bindingAllowsConnection, identityVerified, BackgroundReconnectManager.active == nil,
-              central.state == .poweredOn, peripheral?.state == .connected else { return false }
+              !writeRetirement.blocks(peripheral), central.state == .poweredOn, peripheral?.state == .connected else { return false }
         if case .connected = connectionState, writableCharacteristic != nil {
             return true
         }
@@ -352,7 +352,7 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func resumeDataPath(_ peripheral: CBPeripheral) {
-        guard bindingAllowsConnection, !dataPathStarted else { return }
+        guard bindingAllowsConnection, !writeRetirement.blocks(peripheral), !dataPathStarted else { return }
         connectedDeviceId = nil; writableCharacteristic = nil
         identityVerificationTask?.cancel()
         identityVerificationTask = Task { @MainActor [weak self] in
@@ -398,7 +398,8 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func configureCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
-        guard bindingAllowsConnection, identityVerified, self.peripheral === peripheral, peripheral.state == .connected,
+        guard bindingAllowsConnection, identityVerified, self.peripheral === peripheral,
+              !writeRetirement.blocks(peripheral), peripheral.state == .connected,
               central.state == .poweredOn,
               characteristic.uuid == configuration.characteristicUUID,
               characteristic.service?.uuid == configuration.serviceUUID else { return }
@@ -430,7 +431,7 @@ final class BluetoothService: NSObject, ObservableObject {
     /// A firmware restart/service change can invalidate a previously restored handle.
     /// Refresh GATT discovery on the existing connection; never reuse that handle here.
     private func rediscoverDataPath(_ peripheral: CBPeripheral) {
-        guard self.peripheral === peripheral, peripheral.state == .connected,
+        guard self.peripheral === peripheral, !writeRetirement.blocks(peripheral), peripheral.state == .connected,
               central.state == .poweredOn, BackgroundReconnectManager.active == nil else { return }
         writableCharacteristic = nil
         connectedDeviceId = nil
@@ -484,20 +485,35 @@ final class BluetoothService: NSObject, ObservableObject {
     ) async throws {
         switch type {
         case .withResponse:
-            try await withCheckedThrowingContinuation { continuation in
-                pendingWriteContinuation = continuation
-                pendingWriteCharacteristic = characteristic
+            let wait = BLEWriteWait(peripheral: peripheral, characteristic: characteristic)
+            pendingWriteWait = wait
+            defer { if pendingWriteWait === wait { pendingWriteWait = nil } }
+            try await wait.wait(start: {
                 peripheral.writeValue(data, for: characteristic, type: type)
-            }
+            }, onCancellation: { [self] in
+                guard pendingWriteWait === wait else { return }
+                pendingWriteWait = nil
+                // The continuation has already been failed exactly once. An ATT
+                // callback has no write ID: forbid another write until disconnect
+                // invalidates the old handles and normal reconnect rediscovers them.
+                writeRetirement.retire(peripheral)
+                if self.peripheral === peripheral { writableCharacteristic = nil }
+                diagnostic("retiring connection after cancelled response write id=\(peripheral.identifier)")
+                central.cancelPeripheralConnection(peripheral)
+            })
         case .withoutResponse:
             while !peripheral.canSendWriteWithoutResponse {
-                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    pendingWithoutResponseContinuation = continuation
-                }
+                let wait = BLEWriteWait(peripheral: peripheral, characteristic: characteristic)
+                pendingWithoutResponseWait = wait
+                defer { if pendingWithoutResponseWait === wait { pendingWithoutResponseWait = nil } }
+                try await wait.wait(start: {}, onCancellation: { [self] in
+                    if pendingWithoutResponseWait === wait { pendingWithoutResponseWait = nil }
+                })
                 try Task.checkCancellation()
                 guard self.peripheral === peripheral, writableCharacteristic === characteristic,
                       canSend else { throw BLETransportError.notReady(configuration.deviceName) }
             }
+            try Task.checkCancellation()
             peripheral.writeValue(data, for: characteristic, type: type)
         @unknown default:
             throw BLETransportError.writeFailed("Unknown BLE write type.")
@@ -505,21 +521,17 @@ final class BluetoothService: NSObject, ObservableObject {
     }
 
     private func resumePendingWrite(with result: Result<Void, Error>) {
-        if case .failure(let error) = result, let waiting = pendingWithoutResponseContinuation {
-            pendingWithoutResponseContinuation = nil
-            waiting.resume(throwing: error)
+        if case .failure = result, let waiting = pendingWithoutResponseWait {
+            pendingWithoutResponseWait = nil
+            waiting.complete(result)
         }
-        guard let continuation = pendingWriteContinuation else {
-            return
-        }
-
-        pendingWriteContinuation = nil
-        pendingWriteCharacteristic = nil
-        continuation.resume(with: result)
+        let waiting = pendingWriteWait
+        pendingWriteWait = nil
+        waiting?.complete(result)
     }
 
     private func setConnectionState(_ state: ConnectionState) {
-        if state == .connected && (!bindingAllowsConnection || !identityVerified) { return }
+        if state == .connected && (!bindingAllowsConnection || !identityVerified || writeRetirement.blocks(peripheral)) { return }
         connectionState = state
         log("State: \(state.title) - \(state.message(configuration: configuration))")
         connectionStateHandler?(state)
@@ -869,6 +881,9 @@ extension BluetoothService: CBCentralManagerDelegate {
     }
 
     private func handleDisconnect(_ peripheral: CBPeripheral, isReconnecting: Bool, error: Error?) {
+        // CoreBluetooth guarantees no more peripheral delegate calls after this
+        // disconnect boundary; GATT handles are invalidated before reconnect.
+        writeRetirement.disconnected(peripheral)
         PhoneDiagnosticLog.shared.record("BLE_DISCONNECTED", sessionId: diagnosticSessionId, value1: Int64((error as NSError?)?.code ?? 0))
         clockSyncTask?.cancel(); clockSyncStarted = false; clockSyncInProgress = false
         FileLogger.shared.log("[BLE] Disconnected role=\(role) code=\((error as NSError?)?.code ?? 0) reconnecting=\(isReconnecting)")
@@ -1081,8 +1096,9 @@ extension BluetoothService: CBPeripheralDelegate {
         // can install a different pending write or characteristic.
         MainActor.assumeIsolated {
             guard self.peripheral === peripheral,
-                  pendingWriteCharacteristic === characteristic,
-                  pendingWriteContinuation != nil else {
+                  !writeRetirement.blocks(peripheral),
+                  let wait = pendingWriteWait, wait.isPending,
+                  wait.matches(peripheral: peripheral, characteristic: characteristic) else {
                 FileLogger.shared.log("[BLE] Ignored obsolete write callback")
                 return
             }
@@ -1106,12 +1122,12 @@ extension BluetoothService: CBPeripheralDelegate {
     nonisolated func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
         Task { @MainActor in
             guard self.peripheral === peripheral, canSend,
-                  let continuation = pendingWithoutResponseContinuation else {
+                  let wait = pendingWithoutResponseWait else {
                 return
             }
 
-            pendingWithoutResponseContinuation = nil
-            continuation.resume()
+            pendingWithoutResponseWait = nil
+            wait.complete(.success(()))
         }
     }
 }
