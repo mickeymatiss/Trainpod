@@ -7,6 +7,11 @@ public:
   static constexpr uint32_t DATA_MAX_AGE_MS=60000;
   static constexpr uint32_t RESPONSE_TIMEOUT_MS=5000;
   static constexpr uint32_t SLOW_RETRY_MS=5000;
+  // Only a remaining five-second cooldown is meaningful after standby. An old
+  // signed deadline can otherwise look billions of milliseconds into the future.
+  static uint32_t rearmUpdateDeadlineAfterWake(uint32_t deadline,uint32_t now) {
+    return uint32_t(deadline-now)<=SLOW_RETRY_MS ? deadline : now;
+  }
   bool hasTransitData() const { return hasData_; }
   uint32_t lastDataReceivedMs() const { return received_; }
   bool stale(uint32_t now) const { return !hasData_ || uint32_t(now-received_)>=DATA_MAX_AGE_MS; }

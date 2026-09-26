@@ -1,4 +1,4 @@
-# Aggregate verification — through F10
+# Aggregate verification — through F12
 
 This is an interim aggregate, not completion of the whole campaign. F01, F02 and F03 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
 
@@ -13,6 +13,8 @@ F05: all 19 host executables and the normal Xcode simulator build PASS. A separa
 Latest after F09: **20 host executables PASS** (nine Swift, eleven C++), plus Xcode simulator build PASS. Session reconstruction/retention tests were red before the fix and pass afterward. The formatted two-scope fixture was inspected.
 
 Latest after F10: **21 host executables PASS** (ten Swift, eleven C++), plus Xcode simulator build PASS. Seven formatted report fixtures inspected; missing render completion is explicitly unknown.
+
+Latest after F12: **22 host executables PASS** (ten Swift, twelve C++). New deadline horizon/wake/cooldown fixtures PASS.
 
 ## Host suite
 
@@ -41,6 +43,7 @@ Before F01: 17 executable harnesses PASS. After F01: **18 PASS**, **one compiled
 | firmware_platform_pages_test | PASS |
 | firmware_protocol_contract_test | PASS |
 | firmware_receiver_test | PASS |
+| firmware_refresh_deadline_test | PASS |
 | firmware_refresh_flow_test | PASS |
 | firmware_transit_buffer_test | PASS |
 
@@ -56,7 +59,11 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project 'Ke
 
 ## Firmware target
 
-The Arduino IDE bundled CLI, ESP32 core 3.3.11 and RISC-V compiler are installed. The exact current FQBN and board-option set were not established from the checked-in configuration or narrowly inspected IDE recent-sketch metadata. **Target build not run**: no target/options were guessed or modified. Eleven firmware host harnesses passed; that is not evidence of a successful ESP32 build or hardware session.
+**COMPILE PASS** after F12. Arduino IDE monitor metadata identified `esp32:esp32:esp32c6`; the installed ESP32 3.3.11 core and CLI compiled the actual sketch using that FQBN with no board-option overrides or configuration changes. Program 941024 bytes (71%), globals 192688 bytes (58%). No firmware upload or hardware run. Build outputs are outside the checkout; extra CLI-generated sketch build files were moved out before committing.
+
+```sh
+arduino-cli compile --config-file <existing-arduino-cli.yaml> --fqbn esp32:esp32:esp32c6 --build-path <external-build-directory> --output-dir <external-output-directory> --jobs 2 arduino/sketch_cta_ble_demo
+```
 
 ## Cross-platform contracts
 
@@ -83,4 +90,4 @@ Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
 
 ## Rollback and remaining verification
 
-F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F10-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.
+F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F12-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.

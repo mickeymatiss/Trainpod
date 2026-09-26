@@ -123,9 +123,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `fix(diagnostics): avoid false render failure classification [F10]`.
 - **Rollback:** local classification/wording and its test only. No live device behavior changes.
 
+## Pass 5 — F12
+
+**PASS**
+
+- **Files changed:** `RefreshFlow.h`, `BleIntegration.cpp`, new `tests/refresh_deadline_test.cpp`, and reports. Host C++ discovery automatically includes the new harness.
+- **Behavioral problem:** an expired update deadline older than half the millis range appears future under signed subtraction. The same wake path reset the BLE-session deadline to zero, which also appears future at long uptime and could keep a correctly rearmed episode from starting BLE.
+- **Characterization:** a pre-change arithmetic probe reproduced both comparisons rejecting a >half-range wake. The new harness exercises the production, narrowly named wake-rearm helper, ordinary deadlines, rollover, short standby, both sides of half-range, wake admission, subsequent five-second retry and sixty-second freshness. It preserves any genuine remaining cooldown instead of bypassing it on a short wake.
+- **Production change:** on the existing paused→active transition only, retain a deadline at most five seconds ahead; otherwise rearm it at now. The BLE-session immediate-wake deadline is now millis rather than zero. No power side effects, mutex ownership, display state, retry interval, freshness threshold or 45-second episode limit changed. This is local deadline repair, not a timer framework.
+- **Targeted tests:** old-expression probe confirms the failure; `firmware_refresh_deadline_test` and `firmware_refresh_flow_test` PASS.
+- **Broader tests:** before 21 host PASS; after 22 host PASS (ten Swift, twelve C++), one compiled-only, one manual. Real firmware compile PASS with installed ESP32 core 3.3.11, FQBN `esp32:esp32:esp32c6` found in Arduino IDE metadata. No board option overrides, project/config edits or upload. Output: 941024 program bytes, 192688 global-variable bytes. CLI-generated sketch build artifacts were moved out of the checkout and not committed.
+- **Manual required:** optional ordinary standby/wake smoke F12-M1; no GPIO/power behavior was changed. The long interval is verified arithmetically rather than by claiming weeks of physical observation.
+- **Known limitation:** modulo millis cannot distinguish an exact full wrap from a new short cooldown; the rearm permits at most the normal five-second wait in that narrow alias case, rather than a semi-permanent stall. It does not redesign all firmware timer horizons. Installed board metadata establishes the FQBN, not undocumented physical wiring or hardware success.
+- **Commit message:** `fix(firmware): rearm long-lived refresh deadline [F12]`.
+- **Rollback:** two local wake deadline assignments and the pure helper/test; no iOS or protocol dependency.
+
 ## Campaign progress
 
-F01–F05, F09 and F10 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F05, F09, F10 and F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -141,8 +156,10 @@ F01–F05, F09 and F10 have been implemented. Subsequent passes are not yet eval
 
 | 3B | F09 | `e21552d` | Scope/retention + existing diagnostics PASS | 20 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, diagnostics only |
 
-| 4 | F10 | See delivered commit ID | Render evidence fixtures + diagnostic suite PASS | 21 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, report only |
+| 4 | F10 | `203159c` | Render evidence fixtures + diagnostic suite PASS | 21 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, report only |
+
+| 5 | F12 | See delivered commit ID | Deadline + refresh flow PASS | 22 host PASS; ESP32-C6 compile PASS | Optional F12-M1 wake | PASS | Yes, local deadline state |
 
 ## Deliberately unchanged
 
-F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

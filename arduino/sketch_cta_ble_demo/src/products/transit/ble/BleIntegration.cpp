@@ -657,6 +657,7 @@ void setTransitRefreshPaused(bool paused) {
   const bool changed=refreshFlow.paused()!=paused;
   if(changed) {
     if(paused) { endUpdateLocked("FAILED","paused");failFetchEpisode(); fetchEpisode=false; }
+    else nextUpdateMs=RefreshFlow::rearmUpdateDeadlineAfterWake(nextUpdateMs,millis());
     refreshFlow.setPaused(paused);
     // Ignore a late/incomplete pre-standby response; wake will request a new board.
     transitText.reset();
@@ -667,7 +668,7 @@ void setTransitRefreshPaused(bool paused) {
   }
   xSemaphoreGive(receiverMutex);
   if(paused && changed && bleSession) bleSession->abortSession("session suspended for standby");
-  if(!paused && changed) nextSessionAttemptMs=0;
+  if(!paused && changed) nextSessionAttemptMs=millis();
   if(changed) DebugLog.println(paused ? "[DATA] Standby: NEED_DATA paused; RAM board retained" : "[DATA] Wake: needsData=true; NEED_DATA resumes");
 }
 void finishTransitRefresh(bool success) {
