@@ -267,3 +267,19 @@ Remaining limitations are recorded under each implemented pass: host continuatio
 - **Known limitation:** the test does not render SwiftUI or exercise live location; source ownership and native compilation establish the deletion boundary.
 - **Commit message:** cleanup(ui): remove unused nearby dependencies [C3].
 - **Rollback:** restore 14 removed lines; no active provider or grouping change.
+
+## Pass 8D — C4 dormant direct provider/cache
+
+**PASS**
+
+- **Finding:** C4/F26, dormant direct-provider/cache chain obscuring the active serving path.
+- **Files changed:** Data/LiveTransitProvider.swift, deleted Data/TransitDataCache.swift, Location/LocationService.swift, tests/nearby_retry_policy_test.swift (obsolete cache double only), tests/support/HostSupport.swift (comment only), docs/IOS-STRUCTURE.md, docs/ETA-SHADOW.md and this report.
+- **Behavioral problem:** none intentionally changed. Reference proof found no DirectTransitPayloadProvider constructor in app, DEBUG code, tests or developer commands. After C3, cache references were confined to that dormant class and the live location freshness constant; the Nearby test's empty cache double was obsolete.
+- **Characterization used:** repository-wide symbol searches, constructor review, unchanged shared error/protocol declarations, existing transit/formatter/CTA fixtures and four-agency Nearby characterization. The location acceptance value remains exactly 30 with the same half-open age predicate and accuracy checks; no new UIKit mocking added for a constant relocation.
+- **Production change:** deleted only the dormant DirectTransitPayloadProvider class and TransitDataCache file. Preserved TransitPayloadProvider and LiveTransitError in their existing file; moved the 30-second location-only constant to private LocationService ownership. No type/file rename, fallback change or provider-policy change. Active LegacyTransitArrivalSource, LegacyArrivalAdapter, ArrivalComparisonModels, station repositories, API clients and shared models remain.
+- **Targeted tests:** transit/formatter/cache/protocol host fixtures PASS; Nearby characterization PASS. Both normal Debug and Release Xcode simulator builds PASS (filesystem-synchronized source target, unchanged project/signing configuration).
+- **Broader tests:** 24 standard host PASS; one compiled-only and one manual. Final ESP32-C6 target compile PASS, unchanged firmware, no upload; protocol goldens and generated payload bytes identical to baseline.
+- **Manual verification required:** none added by unreachable-code deletion; existing BLE/theme/display obligations remain. Optional normal Nearby/device refresh smoke can accompany them.
+- **Known limitation:** source reachability and target compilation establish the deletion; host tests do not simulate real provider fallback or CoreLocation. Historical migration text remains history with updated current ownership.
+- **Commit message:** cleanup(transit): remove dormant direct provider and cache [C4].
+- **Rollback:** C4 itself restores the original class/cache and constant owner. For a verbatim rollback of C3 as well, revert C4 first: C3's removed cache property refers to the deleted type. Shared report edits may conflict; do not call that pair conflict-free or dependency-free. No behavioral change requires a data migration.

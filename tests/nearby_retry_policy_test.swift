@@ -8,7 +8,6 @@ enum TransitAgency: CaseIterable { case cta, mta, bart, mbta
 }
 struct LocationService {}
 struct CTAStationRepository {}
-struct TransitDataCache { static let shared = Self() }
 struct FileLogger { static let shared = Self(); func log(_ text: String) {} }
 struct LiveTransitFormatter { static func directionLabel(_ id: String) -> String { id } }
 struct Sample { let stations: [StationArrivals]; let completedAt: Date }

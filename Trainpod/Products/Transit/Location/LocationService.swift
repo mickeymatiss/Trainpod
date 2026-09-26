@@ -20,6 +20,8 @@ enum LocationServiceError: LocalizedError {
 
 @MainActor
 final class LocationService: NSObject {
+    // Location acceptance window, independent of transit snapshot freshness.
+    private static let recentLocationMaxAge: TimeInterval = 30
     private let manager = CLLocationManager()
     private var continuation: CheckedContinuation<CLLocation, Error>?
     private var timeoutTask: Task<Void, Never>?
@@ -88,7 +90,7 @@ final class LocationService: NSObject {
     var recentLocation: CLLocation? {
         guard let fix = manager.location, fix.horizontalAccuracy >= 0,
               fix.horizontalAccuracy <= 1000,
-              (0..<TransitDataCache.freshnessInterval).contains(-fix.timestamp.timeIntervalSinceNow) else { return nil }
+              (0..<Self.recentLocationMaxAge).contains(-fix.timestamp.timeIntervalSinceNow) else { return nil }
         return fix
     }
 

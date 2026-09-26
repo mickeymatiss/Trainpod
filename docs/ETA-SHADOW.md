@@ -28,6 +28,6 @@ No automatic synthetic loops or optional batch runner were added. If a compariso
 - `Debug/TransitLocationSimulator.swift`: TransitHelpers coordinate-generation port.
 - `Debug/ArrivalComparison*`: reused matcher and extended developer screen.
 
-The original direct payload provider is retained as `DirectTransitPayloadProvider`; the existing `LiveTransitProvider` interface now delegates to cloud serving. Backend generators, provider clients, device firmware, and BLE protocol were not changed by this migration.
+The existing `LiveTransitProvider` delegates to cloud serving. C4 removed the unused original `DirectTransitPayloadProvider` and its cache after reference/initializer checks; the active `LegacyTransitArrivalSource`, shared protocol/error types, and location freshness value remain. Backend generators, provider clients, device firmware, and BLE protocol were not changed by this migration.
 
 Validation is limited to compilation; no automated tests or live random-location runs were performed for this task.

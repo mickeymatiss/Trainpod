@@ -7,7 +7,7 @@ Transit-specific code lives in `Trainpod/Products/Transit`:
 | Folder | Contents |
 | --- | --- |
 | `App/` | Root tabs and long-lived service composition (`BLERuntime`) |
-| `Data/` | Station repositories and shared provider contracts; historical direct-provider/cache code is not the active serving path |
+| `Data/` | Station repositories and shared provider contracts (Data/LiveTransitProvider.swift); active provider implementation lives in Serving |
 | `Data/API/` | CTA requests and private response decoding types |
 | `Data/Models/` | Station, arrival, and direction value types |
 | `Location/` | Transit location acquisition and permissions |
