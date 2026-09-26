@@ -108,9 +108,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `fix(diagnostics): scope transaction identity [F09]`.
 - **Rollback:** one observability-only commit; no dependent live BLE behavior changes.
 
+## Pass 4 — F10
+
+**PASS**
+
+- **Files changed:** `DiagnosticInterleave.swift`, new `tests/diagnostic_render_test.swift`, its runner registration and reports.
+- **Behavioral problem:** applied + acknowledged + absent retained display completion was labeled render failure after 1.5 seconds, although supersession/pending render/lost logs can produce the same evidence.
+- **Characterization:** pre-fix test failed for the falsely certain outcome. Fixed tests cover applied+display completed, applied+ACK without display, truncated logs, overlapping transactions, identical transaction IDs in different F09 session scopes, and explicit retained parse failure. A fixture annotates the real serial-only `RENDER_SUPERSEDED generation=…` format; because the structured export has no transaction/generation join, that extra annotation must not manufacture a proven superseded transaction.
+- **Production change:** report `APPLIED / ACKNOWLEDGED — DISPLAY COMPLETION UNKNOWN` and explain which causes the retained evidence cannot distinguish. Confirmed display success and explicit failure events retain their classifications. No firmware/rendering/logging schema change or invented renderer event.
+- **Targeted tests:** new render-evidence test red before / PASS after; all diagnostic reconstruction/scope tests PASS. Seven example formatted reports reviewed: clear success where supported, unknown for missing display evidence, separate overlapping/session traces, explicit parse failure retained.
+- **Broader tests:** before 20 host PASS; after 21 host PASS, one compiled-only, one manual. Xcode Debug simulator build PASS. Protocol/formatter goldens unchanged.
+- **Manual required:** none for this deterministic report wording; optional diagnostic export in the final device session can confirm the observed presentation.
+- **Known limitation:** current structured firmware exports do not identify render supersession/failure by transaction. Serial evidence can help a human investigation, but this formatter cannot prove a superseded outcome from it. Other pre-existing outcome categories are outside this bounded render-certainty fix.
+- **Commit message:** `fix(diagnostics): avoid false render failure classification [F10]`.
+- **Rollback:** local classification/wording and its test only. No live device behavior changes.
+
 ## Campaign progress
 
-F01–F05 and F09 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F05, F09 and F10 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -124,8 +139,10 @@ F01–F05 and F09 have been implemented. Subsequent passes are not yet evaluated
 
 | 3A | F05 | `708640f` | Actual controller simulator: PASS (red before fix) | 19 host PASS; Xcode PASS | F05-M1–M2 | PASS — MANUAL VERIFICATION REQUIRED | Yes, one controller assignment |
 
-| 3B | F09 | See delivered commit ID | Scope/retention + existing diagnostics PASS | 20 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, diagnostics only |
+| 3B | F09 | `e21552d` | Scope/retention + existing diagnostics PASS | 20 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, diagnostics only |
+
+| 4 | F10 | See delivered commit ID | Render evidence fixtures + diagnostic suite PASS | 21 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, report only |
 
 ## Deliberately unchanged
 
-F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

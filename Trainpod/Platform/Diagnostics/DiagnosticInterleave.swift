@@ -365,7 +365,7 @@ nonisolated enum DiagnosticInterleave {
             } else if has("PAYLOAD_PARSE_FAILURE") { outcome = "DEVICE PAYLOAD PARSE FAILURE" }
             else if has("BLE_RESPONSE_WRITE_FAILED") { outcome = "PHONE / COREBLUETOOTH TRANSMISSION FAILURE" }
             else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && has("DISPLAY_UPDATED") { outcome = "SUCCESS" }
-            else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && !has("DISPLAY_UPDATED") && settled { outcome = "DISPLAY / RENDER FAILURE" }
+            else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") { outcome = "APPLIED / ACKNOWLEDGED — DISPLAY COMPLETION UNKNOWN" }
             else if has("PAYLOAD_PARSE_SUCCESS") && !has("DATA_APPLIED") && settled { outcome = "DEVICE APPLICATION STATE FAILURE" }
             else if has("RESPONSE_RX_STARTED") && !has("RESPONSE_RX_COMPLETE") && (has("DATA_APPLIED_ACK_TIMEOUT") || has("RESPONSE_RX_FAILED")) { outcome = "BLE FRAME / CHUNK DELIVERY FAILURE" }
             else if has("BLE_RESPONSE_QUEUED") && !has("RESPONSE_RX_STARTED") && has("DATA_APPLIED_ACK_TIMEOUT") { outcome = "BLE DELIVERY / DEVICE RX START FAILURE" }
@@ -379,6 +379,9 @@ nonisolated enum DiagnosticInterleave {
             output.append("TRANSACTION \(id) — \(outcome)" + (duration.map { " — ≈"+String(format: "%.3fs",Double($0)/1000) } ?? ""))
             output.append(scope.session == "unassigned" ? "  session=unassigned; events not joined" : "  session=\(scope.session)")
             output.append("  Classification describes retained stage evidence, not a hardware root cause. Missing stages can also reflect unavailable logs.")
+            if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && !has("DISPLAY_UPDATED") {
+                output.append("  No transaction-scoped display completion is retained. Supersession, pending rendering, failure and missing logs cannot be distinguished here.")
+            }
             for event in trace where stages.contains(event.code) || event.level == "WARN" || event.level == "ERROR" {
                 let relative = event.source == start.source ? event.uptime-start.uptime : (event.unix != nil && start.unix != nil ? event.unix!-start.unix! : nil)
                 let delta = relative.map { String(format: "%+.3fs",Double($0)/1000) } ?? "time unknown"
