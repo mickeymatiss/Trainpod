@@ -168,6 +168,21 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** fix(ui): use stable arrival row identity [F14].
 - **Rollback:** local projection, view substitutions and test; no cross-platform dependency.
 
+## Pass 7B — F13
+
+**BLOCKED — DESIGN DECISION REQUIRED**
+
+- **Files changed:** tests/nearby_retry_policy_test.swift, tests/run_nearby_retry_policy_test.py and this report. No production change.
+- **Behavioral problem:** periodic MTA errors are caught by loadNearbyStationsAndRefresh and the loop continues; periodic CTA/BART/MBTA errors reach the outer catch and terminate the loop. Initial errors terminate startup for every agency.
+- **Characterization:** compile production view-model control flow and actual transit models with small provider/environment doubles. A test-only generated source replaces exactly one 60-second sleep expression with a stepped clock. No production seam, source edit, UI or networking framework added. All four agencies are exercised for initial failure, periodic failure, recovery or termination, plus cancellation. The generated source and binary remain outside the checkout.
+- **Targeted tests:** stepped-clock characterization PASS. Two preliminary real-timer attempts failed their timing assumption (MTA's first tick had not occurred by the assertion); those are retained as failed experiments, not counted as passed integration coverage. The deterministic test establishes control flow, not OS timer accuracy.
+- **Production change:** none. Source/comments/review do not establish whether the discrepancy is intentional. A retry policy decision is necessary; no inference from MTA's current behavior is treated as authorization.
+- **Broader tests:** final standard host suite 24 PASS; separate policy harness PASS. Xcode simulator and ESP32-C6 builds PASS.
+- **Manual verification required:** none for an unchanged policy; a future intentional policy fix should check foreground nearby refresh for the selected agency.
+- **Known remaining limitation:** MTA and the other three agencies retain different periodic-error behavior; background device refresh is not changed or covered by this UI harness.
+- **Commit message:** test(ui): characterize agency retry policy; await decision [F13].
+- **Rollback:** test/report additions only, no product behavior to revert.
+
 ## Campaign progress
 
 F01–F05 and F09–F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
