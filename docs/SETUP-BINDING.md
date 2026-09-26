@@ -7,21 +7,21 @@ fail-closed `StorageError` state. Missing binding state enters setup. Permanent
 identity remains in the unchanged `DeviceIdentity` module.
 
 An unprovisioned device starts normal-service advertising at boot with unlimited
-duration (`start(0)`). Button-down opens a 60-second eligibility window; it never
-starts advertising. Window expiry only clears eligibility. The BLE session's
+duration (`start(0)`). Button-down opens eligibility until claim or restart; it never
+starts advertising. There is no 60-second eligibility expiry in DeviceProvisioning. The BLE session's
 normal end/abort/completion paths cannot shut down unprovisioned advertising.
 The setup update path bypasses the 15-second session timeout and normal refresh,
 standby, reconnect and manual-window timers, and re-arms advertising after link
 changes or transient start failures. Disconnects in setup return directly to
-advertising without tearing down the BLE stack. Advertising is re-enabled after
-a connection too; only one active setup client is accepted at a time.
+advertising without tearing down the BLE stack. Advertising is re-enabled after link loss; only one active setup client is
+accepted at a time.
 
 The setup screen shows SET UP / Open TrainPod app / Press button, changing to
-Ready to connect during the window. Setup keeps the display awake at the current
+Ready to connect while eligible. Setup keeps the display awake at the current
 brightness cap. Its radio rule does not depend on display state. Transit refresh
-and normal navigation are paused while unprovisioned. After persistence succeeds,
-a 60-second radio grace period permits lost-result recovery, then the existing
-normal lifecycle resumes. Radio/identity-storage faults still require successful
+and normal navigation are paused while unprovisioned. After binding persistence, preferencesPending keeps setup BLE available until
+explicit setup completion succeeds. Completion then opens a 60-second manual
+radio grace period; current BLE_ALWAYS_ON policy still takes precedence. Radio/identity-storage faults still require successful
 hardware initialization; the software does not fabricate an ephemeral identity.
 
 ## Durable state
@@ -30,7 +30,11 @@ Firmware stores one versioned 52-byte NVS blob in namespace `tp_binding`, key
 `record`: 4-byte version (1), 16-byte app installation UUID, 32-byte binding key.
 Existence of a valid complete blob means provisioned. NVS set+commit occurs on
 the Arduino loop, not the BLE callback. Existing malformed/unreadable records are
-preserved and claims fail closed. Binding and permanent identity have separate
+preserved and claims fail closed. The preferences-pending flag is persisted alongside the binding. Display-mode save
+and setup completion are separate commits: a completion failure can follow a
+successful mode save. E2 does not prove the old mode remained active; read-back
+can reconcile it. This documents F08 without changing that behavior.
+Binding and permanent identity have separate
 namespaces. Normal firmware uploads must preserve NVS.
 
 The app stores one atomic Keychain JSON item (`com.trainpod.local-binding.v1`,
@@ -115,13 +119,14 @@ it cannot enable their transit data path. Missing/invalid identity fails closed.
 
 ## Manual acceptance checks
 
-No builds, tests or flashing were run for this change, per the user's preference.
+These are manual acceptance scenarios, not evidence of hardware success.
+Current host/native-build results are recorded separately in engineering-passes/AggregateVerification.md.
 Use a fresh/explicitly unbound board and app to check:
 
 1. Boot discovery before any button press; leave idle beyond normal 15/30/60-second
    timeouts and verify availability. Connect/disconnect during setup and repeat.
-2. Press once, observe ready; wait over 60 seconds and verify advertising remains
-   active while initial claim eligibility expires.
+2. Press once, observe ready; wait over 60 seconds and verify advertising and
+   initial claim eligibility remain active until claim or restart.
 3. Complete setup; verify persisted identity unchanged and both sides skip setup
    after restart. Verify normal transit, themes, clock and display behavior.
 4. Drop the connection after the fourth claim frame but before result receipt;

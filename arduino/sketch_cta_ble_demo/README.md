@@ -1,3 +1,38 @@
+# Current behavior and verification
+
+This overview supersedes historical implementation notes below where they differ.
+
+- `FirmwareConfig::BLE_ALWAYS_ON` defaults to true. `BleIntegration` enables
+  `BleSession` permissive availability at initialization; standby/completion do
+  not imply BLE is off. Serial overrides, setup, and manual windows still have
+  their existing paths. This is radio availability, not unconditional transit polling.
+- Unprovisioned button eligibility lasts until claim or restart. Setup/pending
+  preferences keep BLE available. Mode persistence and explicit setup completion
+  are separate commits; E2 may follow a successful mode save.
+- Valid data application resets the firmware 60-second age clock. Wake explicitly
+  demands data. The current update episode limit is 45 seconds; retry/cooldown
+  remains five seconds. Retaining a board is distinct from receiving fresh data.
+- The phone uses cloud-first serving, direct fallback for CTA/MTA, 20-second cloud
+  snapshot reuse and a separate <180-second source-age check. It does not use the
+  historical direct provider's shared 30-second API cache as its active serving path.
+- A BLE write response proves transport acknowledgement, not board application.
+  The application DATA_APPLIED ACK concerns accepted/applied data.
+  DISPLAY_UPDATED records successful completion of a transaction-carrying display
+  snapshot in DisplayController. Missing display evidence alone cannot distinguish
+  supersession, pending rendering, lost logs or failure (F10).
+
+Sources: FirmwareConfig.h (configuration), src/platform/ble/BleSession,
+src/platform/setup/DeviceProvisioning, src/products/transit/ble/BleIntegration and
+RefreshFlow, src/products/transit/ui/DisplayController. See ../../docs/IOS-STRUCTURE.md
+for phone ownership and freshness, and ../../tests/README.md for host/manual scope.
+Host success and target compilation are not physical BLE/display verification.
+
+## Historical implementation notes
+
+The remaining sections record prior passes, including their then-current build
+status. Their on-demand BLE, timed setup, 30-second API-cache and older timeout
+claims are historical; use the source-checked overview above for current policy.
+
 # Current selected firmware — September 14, 2026
 
 The current changelog is in the repository's `CHANGELOG.md`. Current serial
@@ -108,7 +143,7 @@ a color update without visibly clearing the panel. Page/platform and cached
 train data remain intact. Bottom station diamonds have been removed.
 
 The existing on-demand BLE lifecycle is preserved: push while connected;
-BLE is off in standby, so a sleeping device must wake/connect before a push.
+Historically BLE was off in standby; current BLE_ALWAYS_ON availability supersedes that assumption.
 Stored color survives independently while BLE is off, asleep, or power-cycled.
 
 No builds, tests, or upload were run for this change, as requested.
@@ -335,7 +370,7 @@ and preserves the selected platform/page and train board. Wake redraws RAM data
 immediately before requesting fresh data via the existing recovery flow.
 No actual Light-sleep/Deep-sleep calls or iOS changes are made. Not built/tested.
 
-## Current recovery behavior
+## Recovery behavior (historical pass)
 
 The tracker opens a BLE session whenever it lacks fresh valid data, then sends
 `NEED_DATA` after the phone connects and subscribes. In-session request retry
@@ -355,7 +390,7 @@ keep old arrivals visible and leave retries active.
 This pass has not been built or tested, at the user's request. The notes and
 test fixtures below describe earlier behavior and predate this recovery pass.
 
-## Automatic refresh (current behavior)
+## Automatic refresh (historical behavior)
 
 Connection now requests transit data automatically when none exists or its age
 is at least 60 seconds. A connected device also refreshes at the 60-second age

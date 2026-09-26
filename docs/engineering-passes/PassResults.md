@@ -219,3 +219,19 @@ The separate commits are bounded, but accumulating reports and a shared registry
 - Power architecture, BLE availability policy, renderer architecture, diagnostic firmware purge, provisioning, protocol versions and broad naming remain unchanged.
 
 Remaining limitations are recorded under each implemented pass: host continuation tests do not establish OS radio behavior; valid-but-incorrect cache metadata is not repaired; diagnostic session IDs are not global physical-device identities; missing render evidence remains unknown; display fixtures do not prove pixels. No hardware success is claimed.
+
+## Pass 8A — C1 documentation accuracy
+
+**PASS**
+
+- **Finding:** C1/F24, stale architecture and verification descriptions.
+- **Files changed:** docs/IOS-STRUCTURE.md, docs/SETUP-BINDING.md, firmware README.md, tests/README.md, this report.
+- **Behavioral problem:** none changed; stale prose could guide future work toward obsolete lifecycle/cache assumptions.
+- **Characterization used:** source checks of FirmwareConfig, BleSession, DeviceProvisioning, BleIntegration, RefreshFlow, DisplayController, Serving sources and DEBUG guards. No new tests needed for prose.
+- **Production change:** none. Corrected setup eligibility/pending preferences, current always-on BLE default, cloud/direct ownership, separate freshness clocks, release-used Debug files, ACK versus display completion and manual boundary. Marked firmware's old implementation notes as historical rather than claiming their old verification applies now.
+- **Targeted checks:** source/prose and diff review PASS; four documentation files only before report addition.
+- **Broader tests:** full 24-harness host suite PASS before/after; one compiled-only and one manual. No code/test/project settings changed; native build unnecessary for prose.
+- **Manual verification required:** none added. Existing hardware obligations remain outstanding.
+- **Known limitation:** historical firmware notes remain explicitly labelled history; documentation does not establish hardware success or fix F08 partial-save semantics.
+- **Commit message:** cleanup(docs): align architecture and verification notes [C1].
+- **Rollback:** documentation-only commit; no runtime dependency.
