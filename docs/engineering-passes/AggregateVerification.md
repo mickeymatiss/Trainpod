@@ -1,4 +1,4 @@
-# Aggregate verification — through F04
+# Aggregate verification — through F05
 
 This is an interim aggregate, not completion of the whole campaign. F01, F02 and F03 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
 
@@ -7,6 +7,8 @@ F02 additionally passed the normal Xcode simulator build and all 18 host executa
 F03 passed all 18 host executables and the normal Xcode simulator build. Its actual A/B callback sequence remains manual; source tracing and pure ownership tests are not CoreBluetooth integration coverage.
 
 Latest aggregate after F04: **19 executable harnesses PASS** (eight Swift, eleven C++), plus the Xcode simulator build. CTA cache recovery was characterized with a failing pre-fix test and passing post-fix fixtures.
+
+F05: all 19 host executables and the normal Xcode simulator build PASS. A separate UIKit app harness compiled the real theme controller/model: the pre-fix source failed the stale-confirmation assertion and the fixed source passed all A/B/A, deduplication and manual-Push cases. This is one additional simulator harness, not part of the 19 host count or hardware proof. Temporary simulator removed after verification.
 
 ## Host suite
 
@@ -75,4 +77,4 @@ Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
 
 ## Rollback and remaining verification
 
-F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F04-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.
+F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F05-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.

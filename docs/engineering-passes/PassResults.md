@@ -78,9 +78,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `reliability(cta): tolerate recoverable cache failures [F04]`.
 - **Rollback:** independently revert repository recovery/seam, its harness and registration. No fallback policy, provider, formatter or firmware changes.
 
+## Pass 3A — F05
+
+**PASS — MANUAL VERIFICATION REQUIRED**
+
+- **Files changed:** `DeviceUIColor.swift` (one assignment plus comment); `tests/ios/ThemeTransportSupport.swift`, `tests/ios/theme_controller_test.swift`, `tests/ios/README.md`, `tests/run_theme_controller_test.py`; pass/aggregate reports.
+- **Behavioral problem:** A's acknowledged palette remained available for live-edit deduplication on B, suppressing B's intended update.
+- **Characterization:** actual controller and theme model compiled into a temporary UIKit app; two small doubles provide only transport-facing callbacks/readiness/sent commands. Pre-fix source deterministically failed at the retained-A-confirmation assertion; fixed source passed A confirms X, A→B, B edit/select X sends, B→A, A edit/select X sends, same-connection deduplication and explicit manual Push. Six field packets plus the commit packet remain unchanged. The first standalone executable approach never reached the test body and timed out; it is not counted as a test result. The final app harness checks a success marker so simctl's own zero exit cannot mask an assertion failure.
+- **Production change:** clear `deviceTheme` in the existing non-connected state handler, before pending confirmation cleanup. Selected/local edited themes remain intact. Invalidation is conservative per connection, so even reconnecting to the same device requires a new confirmation before deduplication trusts it. No per-device store, protocol, ACK token, fingerprint or firmware persistence changes.
+- **Targeted tests:** UIKit theme-controller harness red before / PASS after. Temporary simulator created only for this characterization and removed afterward; runner installs/uninstalls its app and does not change the production project.
+- **Broader tests:** pre-change 19 host PASS; post-change all 19 host PASS, one compiled-only, one manual; normal Xcode Debug simulator build PASS. The additional simulator controller harness is separate from those 19 host tests.
+- **Manual required:** F05-M1 theme change/persistence on one physical device; F05-M2 A→B→A switching with different palettes and live editing, if two devices are available. Combine with F03 callback ownership checks. Re-enabling live editing alone still does not send, as before; selecting/editing a different palette or manual Push does.
+- **Known limitation:** connection-boundary events in the simulator stand in for physical device switching. Real delivery, ACK timing and firmware persistence are not proven by these controller tests.
+- **Commit message:** `fix(theme): scope confirmed theme to device [F05]`.
+- **Rollback:** one independent controller assignment and self-contained test harness; no dependency on earlier fixes.
+
 ## Campaign progress
 
-F01–F04 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F05 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -90,8 +105,10 @@ F01–F04 have been implemented. Subsequent passes are not yet evaluated; they a
 
 | 1C | F03 | `5993694` | A/B source trace, ownership harness, Xcode PASS | 18 host PASS | F03-M1 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local ordering change |
 
-| 2 | F04 | See delivered commit ID | CTA cache fixtures: PASS (red before fix) | 19 host PASS; Xcode PASS | No | PASS | Yes, isolated cache policy |
+| 2 | F04 | `ef8e34d` | CTA cache fixtures: PASS (red before fix) | 19 host PASS; Xcode PASS | No | PASS | Yes, isolated cache policy |
+
+| 3A | F05 | See delivered commit ID | Actual controller simulator: PASS (red before fix) | 19 host PASS; Xcode PASS | F05-M1–M2 | PASS — MANUAL VERIFICATION REQUIRED | Yes, one controller assignment |
 
 ## Deliberately unchanged
 
-F05, F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

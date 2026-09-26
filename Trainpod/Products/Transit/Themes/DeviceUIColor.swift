@@ -120,6 +120,8 @@ final class DeviceUIColor: ObservableObject {
         bluetooth.uiColorAcknowledgementHandler = { [weak self] in self?.receive($0) }
         bluetooth.uiColorConnectionStateHandler = { [weak self] state in
             guard state != .connected, let self else { return }
+            // A confirmation belongs to this connection, not the next selected device.
+            self.deviceTheme = nil
             self.liveEnabled = false
             guard self.pendingToken != nil else { return }
             self.fail("Connection ended before confirmation. Hold the device button for two seconds, then retry when connected.")
