@@ -1,5 +1,4 @@
 import Combine
-import CoreLocation
 import Foundation
 
 @MainActor
@@ -16,9 +15,6 @@ final class NearbyStationsViewModel: ObservableObject {
     @Published private(set) var state: ViewState = .idle
 
     private let servingProvider = LiveTransitProvider()
-    private let locationService = LocationService()
-    private let stationRepository = CTAStationRepository()
-    private let transitCache = TransitDataCache.shared
     private var selectedStations: [CTAStation] = []
     private var refreshTask: Task<Void, Never>?
     private var isRefreshing = false
@@ -109,16 +105,6 @@ final class NearbyStationsViewModel: ObservableObject {
         selectedStations = result.stations.map(\.station)
         state = .loaded(result.stations, updatedAt: result.completedAt)
         return result.stations
-    }
-
-    private func nearestStations(to location: CLLocation, from stations: [CTAStation]) -> [CTAStation] {
-        stations
-            .filter(\.isRealtimeCandidate)
-            .sorted { left, right in
-                let leftDistance = left.location.distance(from: location)
-                let rightDistance = right.location.distance(from: location)
-                return leftDistance == rightDistance ? left.mapID < right.mapID : leftDistance < rightDistance
-            }
     }
 
     static func groupArrivals(_ arrivals: [CTAArrival], for station: CTAStation) -> StationArrivals {

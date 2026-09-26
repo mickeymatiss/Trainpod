@@ -251,3 +251,19 @@ Remaining limitations are recorded under each implemented pass: host continuatio
 - **Known limitation:** separate harnesses require their own commands; the historical manual renderer remains manual. Missing optional entries are reported, not turned into new failures.
 - **Commit message:** cleanup(tests): report host harness execution clearly [C2].
 - **Rollback:** runner-output/report-only commit, independent of production behavior.
+
+## Pass 8C — C3 unused Nearby dependencies
+
+**PASS**
+
+- **Finding:** C3/F25, obsolete nearby-view ownership remnants.
+- **Files changed:** NearbyStationsViewModel.swift and this report.
+- **Behavioral problem:** none; inactive local owners obscured the actual serving provider.
+- **Characterization used:** reference search found only declarations of locationService, stationRepository, transitCache and private nearestStations. Reviewed constructors: unused LocationService only creates/configures its private manager, with no request/permission prompt; delegate requests require an absent continuation or false authorization flag. CTA repository sets encoder options; cache initialization has no fetch. Active serving owns its own location source. Existing four-agency Nearby harness used unchanged.
+- **Production change:** removed those three unused properties, the unused private helper and its now-unused CoreLocation import. Grouping/provider/refresh behavior untouched; one logical deletion group.
+- **Targeted tests:** Nearby recovery/cadence/retention/cancellation characterization PASS before/after; normal Xcode simulator build PASS.
+- **Broader tests:** 24 host PASS before/after, one compiled-only, one manual.
+- **Manual verification required:** none added; optional Nearby UI smoke only.
+- **Known limitation:** the test does not render SwiftUI or exercise live location; source ownership and native compilation establish the deletion boundary.
+- **Commit message:** cleanup(ui): remove unused nearby dependencies [C3].
+- **Rollback:** restore 14 removed lines; no active provider or grouping change.
