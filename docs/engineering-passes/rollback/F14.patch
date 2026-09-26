@@ -1,0 +1,92 @@
+diff --git a/Trainpod/Products/Transit/UI/Nearby/NearbyArrivalETA.swift b/Trainpod/Products/Transit/UI/Nearby/NearbyArrivalETA.swift
+deleted file mode 100644
+index df8f4d0..0000000
+--- a/Trainpod/Products/Transit/UI/Nearby/NearbyArrivalETA.swift
++++ /dev/null
+@@ -1,12 +0,0 @@
+-import Foundation
+-
+-/// Keep the arrival's identity when projecting it to the displayed minute value.
+-struct NearbyArrivalETA: Identifiable, Equatable {
+-    let id: String
+-    let minutes: Int
+-
+-    init(_ arrival: CTAArrival, at date: Date = Date()) {
+-        id = arrival.id
+-        minutes = max(0, Int((arrival.arrivalTime.timeIntervalSince(date) / 60).rounded(.up)))
+-    }
+-}
+diff --git a/Trainpod/Products/Transit/UI/Nearby/NearbyStationsView.swift b/Trainpod/Products/Transit/UI/Nearby/NearbyStationsView.swift
+index 5b58924..5ff593e 100644
+--- a/Trainpod/Products/Transit/UI/Nearby/NearbyStationsView.swift
++++ b/Trainpod/Products/Transit/UI/Nearby/NearbyStationsView.swift
+@@ -360,7 +360,7 @@ private struct DirectionArrivalsView: View {
+         var groups: [TrainLineGroup] = []
+ 
+         for train in visibleTrains {
+-            let eta = NearbyArrivalETA(train)
++            let eta = max(0, Int((train.arrivalTime.timeIntervalSinceNow / 60).rounded(.up)))
+ 
+             if let index = groups.firstIndex(where: { $0.route == train.route }) {
+                 groups[index].etas.append(eta)
+@@ -397,7 +397,7 @@ private struct CompactArrivalsView: View {
+ 
+ private struct TrainLineGroup: Identifiable {
+     let route: String
+-    var etas: [NearbyArrivalETA]
++    var etas: [Int]
+     var displayName: String? = nil
+     var displayColor: String? = nil
+ 
+@@ -412,8 +412,8 @@ private struct TrainLineGroupView: View {
+             RouteBadge(route: group.route, displayName: group.displayName, displayColor: group.displayColor)
+ 
+             HStack(spacing: 12) {
+-                ForEach(group.etas) { eta in
+-                    Text("\(eta.minutes) min")
++                ForEach(group.etas, id: \.self) { eta in
++                    Text("\(eta) min")
+                         .font(.caption.monospacedDigit())
+                         .foregroundStyle(.secondary)
+                 }
+diff --git a/tests/nearby_arrival_identity_test.swift b/tests/nearby_arrival_identity_test.swift
+deleted file mode 100644
+index f3978b7..0000000
+--- a/tests/nearby_arrival_identity_test.swift
++++ /dev/null
+@@ -1,22 +0,0 @@
+-import Foundation
+-
+-@main struct NearbyArrivalIdentityChecks {
+-    static func main() {
+-        let now = Date(timeIntervalSince1970: 1000)
+-        func arrival(_ id: String, _ seconds: Double) -> CTAArrival {
+-            CTAArrival(id: id, route: "Blue", destination: "Terminal", arrivalTime: now.addingTimeInterval(seconds),
+-                       approaching: false, delayed: false, stationName: "Station", stopDescription: "North", directionID: "N")
+-        }
+-        let trains = [arrival("run-1", 270), arrival("run-2", 280)]
+-        let rows = trains.map { NearbyArrivalETA($0, at: now) }
+-        precondition(rows.map(\.minutes) == [5, 5])
+-        precondition(Set(rows.map(\.minutes)).count == 1, "Characterizes the former ETA-value identity collision")
+-        precondition(rows.map(\.id) == trains.map(\.id) && Set(rows.map(\.id)).count == 2)
+-        let later = trains.map { NearbyArrivalETA($0, at: now.addingTimeInterval(60)) }
+-        precondition(later.map(\.id) == rows.map(\.id) && later.map(\.minutes) == [4, 4])
+-        precondition(NearbyArrivalETA(arrival("past", -1), at: now).minutes == 0)
+-        precondition(NearbyArrivalETA(arrival("boundary", 60), at: now).minutes == 1)
+-        precondition(NearbyArrivalETA(arrival("after-boundary", 60.1), at: now).minutes == 2)
+-        print("PASS equal-ETA distinct arrival identity, unchanged order/rounding and stable IDs as minutes change")
+-    }
+-}
+diff --git a/tests/run_tests.py b/tests/run_tests.py
+index b6a5a2b..285e649 100644
+--- a/tests/run_tests.py
++++ b/tests/run_tests.py
+@@ -27,7 +27,7 @@ P='Trainpod/Products/Transit/'
+ common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
+ manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
+ swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+-extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
++extra={'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
+ for name,(sources,arguments) in extra.items():
+     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
+ for name,sources,arguments in swift:

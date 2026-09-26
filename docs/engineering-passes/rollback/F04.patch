@@ -1,0 +1,148 @@
+diff --git a/Trainpod/Products/Transit/Data/CTAStationRepository.swift b/Trainpod/Products/Transit/Data/CTAStationRepository.swift
+index 62bff96..088605f 100644
+--- a/Trainpod/Products/Transit/Data/CTAStationRepository.swift
++++ b/Trainpod/Products/Transit/Data/CTAStationRepository.swift
+@@ -19,22 +19,16 @@ struct CTAStationRepository {
+     private let decoder = JSONDecoder()
+     private let encoder = JSONEncoder()
+     private let fileManager: FileManager
+-    private let session: URLSession
+ 
+-    init(fileManager: FileManager = .default, session: URLSession = .shared) {
++    init(fileManager: FileManager = .default) {
+         self.fileManager = fileManager
+-        self.session = session
+         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+     }
+ 
+     func loadStations() async throws -> [CTAStation] {
+-        do {
+-            if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty,
+-               cachedStations.allSatisfy({ $0.stopDirections != nil }) {
+-                return cachedStations
+-            }
+-        } catch {
+-            FileLogger.shared.log("[CACHE] CTA metadata cache unreadable; fetching metadata")
++        if let cachedStations = try loadCachedStations(), !cachedStations.isEmpty,
++           cachedStations.allSatisfy({ $0.stopDirections != nil }) {
++            return cachedStations
+         }
+ 
+         let stations = try await fetchStations()
+@@ -42,8 +36,7 @@ struct CTAStationRepository {
+             throw CTAStationRepositoryError.noStations
+         }
+ 
+-        do { try saveStations(stations) }
+-        catch { FileLogger.shared.log("[CACHE] CTA metadata save failed; using fetched metadata") }
++        try saveStations(stations)
+         return stations
+     }
+ 
+@@ -96,7 +89,7 @@ struct CTAStationRepository {
+             throw CTAStationRepositoryError.invalidURL
+         }
+ 
+-        let (data, response) = try await session.data(for: URLRequest(url: url, timeoutInterval: 6))
++        let (data, response) = try await URLSession.shared.data(for: URLRequest(url: url, timeoutInterval: 6))
+         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+             FileLogger.shared.log("[API] Invalid metadata response HTTP=\((response as? HTTPURLResponse)?.statusCode ?? 0)")
+             throw CTAStationRepositoryError.invalidResponse
+diff --git a/tests/cta_cache_test.swift b/tests/cta_cache_test.swift
+deleted file mode 100644
+index 5aaed20..0000000
+--- a/tests/cta_cache_test.swift
++++ /dev/null
+@@ -1,79 +0,0 @@
+-import Foundation
+-
+-final class MetadataFiles: FileManager, @unchecked Sendable {
+-    let directory: URL
+-    var failSave = false
+-    init(_ directory: URL) { self.directory = directory; super.init() }
+-    override func url(for directory: SearchPathDirectory, in domain: SearchPathDomainMask,
+-                      appropriateFor url: URL?, create shouldCreate: Bool) throws -> URL { self.directory }
+-    override func createDirectory(at url: URL, withIntermediateDirectories create: Bool,
+-                                  attributes: [FileAttributeKey: Any]? = nil) throws {
+-        if failSave { throw CocoaError(.fileWriteOutOfSpace) }
+-        try super.createDirectory(at: url, withIntermediateDirectories: create, attributes: attributes)
+-    }
+-}
+-final class MetadataHTTP: URLProtocol, @unchecked Sendable {
+-    nonisolated(unsafe) static var requests = 0
+-    nonisolated(unsafe) static var fail = false
+-    static let fixture = Data(#"[{"stop_id":"30001","direction_id":"N","station_name":"Fixture","map_id":"40001","location":{"latitude":"41.9","longitude":"-87.6"}},{"stop_id":"30002","direction_id":"S","station_name":"Fixture","map_id":"40001","location":{"latitude":"41.9","longitude":"-87.6"}}]"#.utf8)
+-    override class func canInit(with request: URLRequest) -> Bool { true }
+-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+-    override func startLoading() {
+-        Self.requests += 1
+-        if Self.fail { client?.urlProtocol(self, didFailWithError: URLError(.notConnectedToInternet)); return }
+-        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, cacheStoragePolicy: .notAllowed)
+-        client?.urlProtocol(self, didLoad: Self.fixture)
+-        client?.urlProtocolDidFinishLoading(self)
+-    }
+-    override func stopLoading() {}
+-}
+-
+-@main struct CTACacheChecks {
+-    static func main() async throws {
+-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+-        defer { try? FileManager.default.removeItem(at: root) }
+-        let files = MetadataFiles(root)
+-        let config = URLSessionConfiguration.ephemeral
+-        config.protocolClasses = [MetadataHTTP.self]
+-        let session = URLSession(configuration: config)
+-        defer { session.invalidateAndCancel() }
+-        let repository = CTAStationRepository(fileManager: files, session: session)
+-        let cache = root.appendingPathComponent("CTAStationMetadata/stations.json")
+-        let expected = CTAStation(id: "40001", name: "Fixture", latitude: 41.9, longitude: -87.6,
+-                                  mapID: "40001", stopIDs: ["30001", "30002"], stopDirections: ["30001":"N", "30002":"S"])
+-        var failures: [String] = []
+-        func load(_ name: String) async {
+-            do { let values = try await repository.loadStations(); if values != [expected] { failures.append(name + ": wrong metadata") } }
+-            catch { failures.append(name + ": \(error)") }
+-        }
+-        await load("missing cache + network + save")
+-        precondition(MetadataHTTP.requests == 1 && FileManager.default.fileExists(atPath: cache.path))
+-        let saved = try JSONDecoder().decode([CTAStation].self, from: Data(contentsOf: cache))
+-        precondition(saved == [expected])
+-        MetadataHTTP.fail = true
+-        await load("usable cache while upstream is unavailable")
+-        precondition(MetadataHTTP.requests == 1, "Valid cache is authoritative: no network attempted")
+-        MetadataHTTP.fail = false
+-        try Data("{truncated".utf8).write(to: cache)
+-        await load("corrupt cache recovers by fetching")
+-        if MetadataHTTP.requests != 2 { failures.append("Corrupt cache blocked the network") }
+-        try? FileManager.default.removeItem(at: cache)
+-        files.failSave = true
+-        await load("network success survives storage failure")
+-        precondition(!FileManager.default.fileExists(atPath: cache.path))
+-        files.failSave = false
+-        // Old metadata missing required direction mapping must NOT become a usable
+-        // fallback merely because a download failed; preserve existing semantics.
+-        var old = expected; old.stopDirections = nil
+-        try JSONEncoder().encode([old]).write(to: cache)
+-        MetadataHTTP.fail = true
+-        do { _ = try await repository.loadStations(); failures.append("Accepted cache without required mapping") }
+-        catch { }
+-        try Data("{truncated".utf8).write(to: cache)
+-        do { _ = try await repository.loadStations(); failures.append("Invented metadata with corrupt cache + failed network") }
+-        catch { }
+-        precondition(failures.isEmpty, failures.joined(separator: "\n"))
+-        print("PASS CTA valid/missing/corrupt cache, save failure, upstream outage, mandatory direction mapping")
+-    }
+-}
+diff --git a/tests/run_tests.py b/tests/run_tests.py
+index b6a5a2b..4026005 100644
+--- a/tests/run_tests.py
++++ b/tests/run_tests.py
+@@ -27,7 +27,7 @@ P='Trainpod/Products/Transit/'
+ common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
+ manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
+ swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+-extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
++extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
+ for name,(sources,arguments) in extra.items():
+     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
+ for name,sources,arguments in swift:

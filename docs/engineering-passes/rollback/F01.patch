@@ -1,0 +1,378 @@
+diff --git a/Trainpod/Platform/BLE/BLEWriteWait.swift b/Trainpod/Platform/BLE/BLEWriteWait.swift
+deleted file mode 100644
+index 758c53e..0000000
+--- a/Trainpod/Platform/BLE/BLEWriteWait.swift
++++ /dev/null
+@@ -1,65 +0,0 @@
+-import Foundation
+-
+-/// One transport suspension, owned by one peripheral/characteristic pair.
+-/// Keeping each wait separate prevents a delayed cancellation handler from
+-/// resolving a later operation. CoreBluetooth itself does not provide write IDs.
+-@MainActor
+-final class BLEWriteWait {
+-    private let peripheral: AnyObject
+-    private let characteristic: AnyObject
+-    private var continuation: CheckedContinuation<Void, Error>?
+-
+-    init(peripheral: AnyObject, characteristic: AnyObject) {
+-        self.peripheral = peripheral
+-        self.characteristic = characteristic
+-    }
+-
+-    var isPending: Bool { continuation != nil }
+-
+-    func matches(peripheral: AnyObject, characteristic: AnyObject) -> Bool {
+-        self.peripheral === peripheral && self.characteristic === characteristic
+-    }
+-
+-    func wait(start: () -> Void, onCancellation: @escaping @MainActor () -> Void) async throws {
+-        try await withTaskCancellationHandler {
+-            try Task.checkCancellation()
+-            try await withCheckedThrowingContinuation { continuation in
+-                self.continuation = continuation
+-                start()
+-            }
+-            try Task.checkCancellation()
+-        } onCancel: {
+-            Task { @MainActor in
+-                // Clear/resume first. Retirement (for response writes only) runs
+-                // in the same actor turn, before the released sender can proceed.
+-                if self.complete(.failure(CancellationError())) { onCancellation() }
+-            }
+-        }
+-    }
+-
+-    @discardableResult
+-    func complete(_ result: Result<Void, Error>) -> Bool {
+-        guard let continuation else { return false }
+-        self.continuation = nil
+-        continuation.resume(with: result)
+-        return true
+-    }
+-}
+-
+-/// Blocks reuse only until CoreBluetooth confirms disconnection. The existing
+-/// reconnect path, not this gate, owns recovery and subsequent discovery.
+-@MainActor
+-struct BLEWriteRetirement {
+-    private var peripheral: AnyObject?
+-
+-    func blocks(_ candidate: AnyObject?) -> Bool {
+-        guard let peripheral, let candidate else { return false }
+-        return peripheral === candidate
+-    }
+-
+-    mutating func retire(_ candidate: AnyObject) { peripheral = candidate }
+-
+-    mutating func disconnected(_ candidate: AnyObject) {
+-        if blocks(candidate) { peripheral = nil }
+-    }
+-}
+diff --git a/Trainpod/Platform/BLE/BluetoothService.swift b/Trainpod/Platform/BLE/BluetoothService.swift
+index 369f31b..7dfa036 100644
+--- a/Trainpod/Platform/BLE/BluetoothService.swift
++++ b/Trainpod/Platform/BLE/BluetoothService.swift
+@@ -103,9 +103,9 @@ final class BluetoothService: NSObject, ObservableObject {
+     private var central: CBCentralManager!
+     private var peripheral: CBPeripheral?
+     private var writableCharacteristic: CBCharacteristic?
+-    private var pendingWriteWait: BLEWriteWait?
+-    private var pendingWithoutResponseWait: BLEWriteWait?
+-    private var writeRetirement = BLEWriteRetirement()
++    private var pendingWriteContinuation: CheckedContinuation<Void, Error>?
++    private var pendingWriteCharacteristic: CBCharacteristic?
++    private var pendingWithoutResponseContinuation: CheckedContinuation<Void, Error>?
+     private var writeInProgress = false
+     private var allDebugMessages: [DebugMessage] = []
+     private var autoScanEnabled = true
+@@ -168,7 +168,7 @@ final class BluetoothService: NSObject, ObservableObject {
+ 
+     var canSend: Bool {
+         guard bindingAllowsConnection, identityVerified, BackgroundReconnectManager.active == nil,
+-              !writeRetirement.blocks(peripheral), central.state == .poweredOn, peripheral?.state == .connected else { return false }
++              central.state == .poweredOn, peripheral?.state == .connected else { return false }
+         if case .connected = connectionState, writableCharacteristic != nil {
+             return true
+         }
+@@ -353,7 +353,7 @@ final class BluetoothService: NSObject, ObservableObject {
+ 
+     private func resumeDataPath(_ peripheral: CBPeripheral) {
+         guard self.peripheral === peripheral, peripheral.state == .connected, central.state == .poweredOn else { return }
+-        guard bindingAllowsConnection, !writeRetirement.blocks(peripheral), !dataPathStarted else { return }
++        guard bindingAllowsConnection, !dataPathStarted else { return }
+         connectedDeviceId = nil; writableCharacteristic = nil
+         identityVerificationTask?.cancel()
+         identityVerificationTask = Task { @MainActor [weak self] in
+@@ -399,8 +399,7 @@ final class BluetoothService: NSObject, ObservableObject {
+     }
+ 
+     private func configureCharacteristic(_ characteristic: CBCharacteristic, on peripheral: CBPeripheral) {
+-        guard bindingAllowsConnection, identityVerified, self.peripheral === peripheral,
+-              !writeRetirement.blocks(peripheral), peripheral.state == .connected,
++        guard bindingAllowsConnection, identityVerified, self.peripheral === peripheral, peripheral.state == .connected,
+               central.state == .poweredOn,
+               characteristic.uuid == configuration.characteristicUUID,
+               characteristic.service?.uuid == configuration.serviceUUID else { return }
+@@ -432,7 +431,7 @@ final class BluetoothService: NSObject, ObservableObject {
+     /// A firmware restart/service change can invalidate a previously restored handle.
+     /// Refresh GATT discovery on the existing connection; never reuse that handle here.
+     private func rediscoverDataPath(_ peripheral: CBPeripheral) {
+-        guard self.peripheral === peripheral, !writeRetirement.blocks(peripheral), peripheral.state == .connected,
++        guard self.peripheral === peripheral, peripheral.state == .connected,
+               central.state == .poweredOn, BackgroundReconnectManager.active == nil else { return }
+         writableCharacteristic = nil
+         connectedDeviceId = nil
+@@ -486,35 +485,20 @@ final class BluetoothService: NSObject, ObservableObject {
+     ) async throws {
+         switch type {
+         case .withResponse:
+-            let wait = BLEWriteWait(peripheral: peripheral, characteristic: characteristic)
+-            pendingWriteWait = wait
+-            defer { if pendingWriteWait === wait { pendingWriteWait = nil } }
+-            try await wait.wait(start: {
++            try await withCheckedThrowingContinuation { continuation in
++                pendingWriteContinuation = continuation
++                pendingWriteCharacteristic = characteristic
+                 peripheral.writeValue(data, for: characteristic, type: type)
+-            }, onCancellation: { [self] in
+-                guard pendingWriteWait === wait else { return }
+-                pendingWriteWait = nil
+-                // The continuation has already been failed exactly once. An ATT
+-                // callback has no write ID: forbid another write until disconnect
+-                // invalidates the old handles and normal reconnect rediscovers them.
+-                writeRetirement.retire(peripheral)
+-                if self.peripheral === peripheral { writableCharacteristic = nil }
+-                diagnostic("retiring connection after cancelled response write id=\(peripheral.identifier)")
+-                central.cancelPeripheralConnection(peripheral)
+-            })
++            }
+         case .withoutResponse:
+             while !peripheral.canSendWriteWithoutResponse {
+-                let wait = BLEWriteWait(peripheral: peripheral, characteristic: characteristic)
+-                pendingWithoutResponseWait = wait
+-                defer { if pendingWithoutResponseWait === wait { pendingWithoutResponseWait = nil } }
+-                try await wait.wait(start: {}, onCancellation: { [self] in
+-                    if pendingWithoutResponseWait === wait { pendingWithoutResponseWait = nil }
+-                })
++                try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
++                    pendingWithoutResponseContinuation = continuation
++                }
+                 try Task.checkCancellation()
+                 guard self.peripheral === peripheral, writableCharacteristic === characteristic,
+                       canSend else { throw BLETransportError.notReady(configuration.deviceName) }
+             }
+-            try Task.checkCancellation()
+             peripheral.writeValue(data, for: characteristic, type: type)
+         @unknown default:
+             throw BLETransportError.writeFailed("Unknown BLE write type.")
+@@ -522,17 +506,21 @@ final class BluetoothService: NSObject, ObservableObject {
+     }
+ 
+     private func resumePendingWrite(with result: Result<Void, Error>) {
+-        if case .failure = result, let waiting = pendingWithoutResponseWait {
+-            pendingWithoutResponseWait = nil
+-            waiting.complete(result)
++        if case .failure(let error) = result, let waiting = pendingWithoutResponseContinuation {
++            pendingWithoutResponseContinuation = nil
++            waiting.resume(throwing: error)
+         }
+-        let waiting = pendingWriteWait
+-        pendingWriteWait = nil
+-        waiting?.complete(result)
++        guard let continuation = pendingWriteContinuation else {
++            return
++        }
++
++        pendingWriteContinuation = nil
++        pendingWriteCharacteristic = nil
++        continuation.resume(with: result)
+     }
+ 
+     private func setConnectionState(_ state: ConnectionState) {
+-        if state == .connected && (!bindingAllowsConnection || !identityVerified || writeRetirement.blocks(peripheral)) { return }
++        if state == .connected && (!bindingAllowsConnection || !identityVerified) { return }
+         connectionState = state
+         log("State: \(state.title) - \(state.message(configuration: configuration))")
+         connectionStateHandler?(state)
+@@ -883,9 +871,6 @@ extension BluetoothService: CBCentralManagerDelegate {
+     }
+ 
+     private func handleDisconnect(_ peripheral: CBPeripheral, isReconnecting: Bool, error: Error?) {
+-        // CoreBluetooth guarantees no more peripheral delegate calls after this
+-        // disconnect boundary; GATT handles are invalidated before reconnect.
+-        writeRetirement.disconnected(peripheral)
+         guard self.peripheral?.identifier == peripheral.identifier else { return }
+         PhoneDiagnosticLog.shared.record("BLE_DISCONNECTED", sessionId: diagnosticSessionId, value1: Int64((error as NSError?)?.code ?? 0))
+         clockSyncTask?.cancel(); clockSyncStarted = false; clockSyncInProgress = false
+@@ -1103,9 +1088,8 @@ extension BluetoothService: CBPeripheralDelegate {
+         // can install a different pending write or characteristic.
+         MainActor.assumeIsolated {
+             guard self.peripheral === peripheral,
+-                  !writeRetirement.blocks(peripheral),
+-                  let wait = pendingWriteWait, wait.isPending,
+-                  wait.matches(peripheral: peripheral, characteristic: characteristic) else {
++                  pendingWriteCharacteristic === characteristic,
++                  pendingWriteContinuation != nil else {
+                 FileLogger.shared.log("[BLE] Ignored obsolete write callback")
+                 return
+             }
+@@ -1129,12 +1113,12 @@ extension BluetoothService: CBPeripheralDelegate {
+     nonisolated func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+         Task { @MainActor in
+             guard self.peripheral === peripheral, canSend,
+-                  let wait = pendingWithoutResponseWait else {
++                  let continuation = pendingWithoutResponseContinuation else {
+                 return
+             }
+ 
+-            pendingWithoutResponseWait = nil
+-            wait.complete(.success(()))
++            pendingWithoutResponseContinuation = nil
++            continuation.resume()
+         }
+     }
+ }
+diff --git a/tests/ble_write_wait_test.swift b/tests/ble_write_wait_test.swift
+deleted file mode 100644
+index 4926d11..0000000
+--- a/tests/ble_write_wait_test.swift
++++ /dev/null
+@@ -1,124 +0,0 @@
+-import Foundation
+-
+-@main struct BLEWriteWaitChecks {
+-    enum Failure: Error { case write, disconnect, superseded }
+-
+-    @MainActor static func installed(_ wait: BLEWriteWait) async {
+-        // Actor handoff, not wall-clock timing. The host runner bounds the process.
+-        while !wait.isPending { await Task.yield() }
+-    }
+-
+-    @MainActor static func cancelled(_ task: Task<Void, Error>) async {
+-        do { try await task.value; preconditionFailure("Expected cancellation") }
+-        catch is CancellationError { }
+-        catch { preconditionFailure("Unexpected error: \(error)") }
+-    }
+-
+-    @MainActor static func main() async throws {
+-        let peer = NSObject(), otherPeer = NSObject(), oldHandle = NSObject()
+-        var retirement = BLEWriteRetirement()
+-        var retirementCount = 0
+-        var released = 0
+-        var submissions = 0
+-
+-        // Normal response completion, explicit failure, disconnect, supersession.
+-        for result: Result<Void, Error> in [.success(()), .failure(Failure.write),
+-                                           .failure(Failure.disconnect), .failure(Failure.superseded)] {
+-            let wait = BLEWriteWait(peripheral: peer, characteristic: oldHandle)
+-            let task = Task { @MainActor in
+-                defer { released += 1 }
+-                try await wait.wait(start: { submissions += 1 }, onCancellation: { retirementCount += 1 })
+-            }
+-            await installed(wait)
+-            precondition(wait.complete(result))
+-            precondition(!wait.complete(result), "A duplicate callback must not resume twice")
+-            switch result {
+-            case .success: try await task.value
+-            case .failure:
+-                do { try await task.value; preconditionFailure("Expected transport failure") }
+-                catch is Failure { }
+-            }
+-            task.cancel() // Completed transport operations must not retire a connection.
+-            await Task.yield()
+-            precondition(retirementCount == 0)
+-        }
+-        precondition(released == 4 && submissions == 4)
+-
+-        // Cancel a response write. Observe resolution BEFORE the retirement action.
+-        let abandoned = BLEWriteWait(peripheral: peer, characteristic: oldHandle)
+-        let task = Task { @MainActor in
+-            defer { released += 1 }
+-            try await abandoned.wait(start: { submissions += 1 }, onCancellation: {
+-                precondition(!abandoned.isPending)
+-                retirement.retire(peer)
+-                retirementCount += 1
+-            })
+-        }
+-        await installed(abandoned)
+-        task.cancel()
+-        await cancelled(task)
+-        precondition(released == 5 && retirementCount == 1)
+-        precondition(retirement.blocks(peer) && !retirement.blocks(otherPeer))
+-        precondition(!abandoned.complete(.success(())), "Late old callback must be harmless")
+-        precondition(!abandoned.complete(.failure(Failure.disconnect)))
+-        retirement.disconnected(otherPeer)
+-        precondition(retirement.blocks(peer), "Unrelated disconnect must not reopen the old connection")
+-
+-        // The real disconnect barrier invalidates GATT handles. Reconnect uses a
+-        // newly discovered handle; no fake peripheral or reconnect algorithm here.
+-        retirement.disconnected(peer)
+-        precondition(!retirement.blocks(peer))
+-        let newHandle = NSObject()
+-        let subsequent = BLEWriteWait(peripheral: peer, characteristic: newHandle)
+-        let next = Task { @MainActor in
+-            defer { released += 1 }
+-            try await subsequent.wait(start: { submissions += 1 }, onCancellation: {
+-                retirement.retire(peer); retirementCount += 1
+-            })
+-        }
+-        await installed(subsequent)
+-        precondition(!subsequent.matches(peripheral: peer, characteristic: oldHandle))
+-        precondition(!subsequent.matches(peripheral: otherPeer, characteristic: newHandle))
+-        precondition(!abandoned.complete(.success(())))
+-        precondition(subsequent.isPending, "An old callback cannot resolve the new wait")
+-        precondition(subsequent.matches(peripheral: peer, characteristic: newHandle))
+-        precondition(subsequent.complete(.success(())))
+-        try await next.value
+-        precondition(released == 6 && retirementCount == 1)
+-
+-        // Cancellation before installing a wait must submit nothing and retire nothing.
+-        let neverStarted = BLEWriteWait(peripheral: peer, characteristic: newHandle)
+-        let early = Task { @MainActor in
+-            try await neverStarted.wait(start: { preconditionFailure("Cancelled before submission") },
+-                                        onCancellation: { preconditionFailure("No operation to retire") })
+-        }
+-        early.cancel() // Same actor: task body cannot have started yet.
+-        await cancelled(early)
+-        precondition(!neverStarted.isPending)
+-
+-        // Completion wins before the queued cancellation handler: no retirement.
+-        let won = BLEWriteWait(peripheral: peer, characteristic: newHandle)
+-        let race = Task { @MainActor in
+-            try await won.wait(start: {}, onCancellation: { preconditionFailure("Completion already resolved") })
+-        }
+-        await installed(won)
+-        race.cancel()
+-        precondition(won.complete(.success(())))
+-        await cancelled(race)
+-
+-        // Readiness is capacity, not an outstanding response. Cancellation releases
+-        // the wait but must NOT retire the connection. The next readiness wait works.
+-        for cancel in [true, false] {
+-            let ready = BLEWriteWait(peripheral: peer, characteristic: newHandle)
+-            var removed = false
+-            let readiness = Task { @MainActor in
+-                try await ready.wait(start: {}, onCancellation: { removed = true })
+-            }
+-            await installed(ready)
+-            if cancel { readiness.cancel(); await cancelled(readiness); precondition(removed) }
+-            else { precondition(ready.complete(.success(()))); try await readiness.value }
+-            precondition(!retirement.blocks(peer) && retirementCount == 1)
+-        }
+-        print("PASS BLE wait completion/failure/disconnect/supersession, cancellation races, retirement barrier, late callback ownership, subsequent write, readiness cancellation")
+-    }
+-}
+diff --git a/tests/run_tests.py b/tests/run_tests.py
+index b6a5a2b..8b31fa7 100644
+--- a/tests/run_tests.py
++++ b/tests/run_tests.py
+@@ -27,7 +27,7 @@ P='Trainpod/Products/Transit/'
+ common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
+ manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
+ swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+-extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
++extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
+ for name,(sources,arguments) in extra.items():
+     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
+ for name,sources,arguments in swift:

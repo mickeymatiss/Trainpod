@@ -1,0 +1,72 @@
+[
+  {
+    "finding": "F01",
+    "commit": "d022b55",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F02",
+    "commit": "faa100f",
+    "exit": 0,
+    "passed": 24,
+    "failures": []
+  },
+  {
+    "finding": "F03",
+    "commit": "5993694",
+    "exit": 0,
+    "passed": 24,
+    "failures": []
+  },
+  {
+    "finding": "F04",
+    "commit": "ef8e34d",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F05",
+    "commit": "708640f",
+    "exit": 0,
+    "passed": 24,
+    "failures": []
+  },
+  {
+    "finding": "F09",
+    "commit": "e21552d",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F10",
+    "commit": "203159c",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F12",
+    "commit": "fe53a58",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F11",
+    "commit": "27fc013",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  },
+  {
+    "finding": "F14",
+    "commit": "a7dc7a9",
+    "exit": 0,
+    "passed": 23,
+    "failures": []
+  }
+]

@@ -1,0 +1,101 @@
+diff --git a/arduino/sketch_cta_ble_demo/src/products/transit/ui/ArrivalScreen.cpp b/arduino/sketch_cta_ble_demo/src/products/transit/ui/ArrivalScreen.cpp
+index 34c6d09..6dc4a9f 100644
+--- a/arduino/sketch_cta_ble_demo/src/products/transit/ui/ArrivalScreen.cpp
++++ b/arduino/sketch_cta_ble_demo/src/products/transit/ui/ArrivalScreen.cpp
+@@ -17,10 +17,20 @@
+ #include "fonts/ArrivalItalic18.h"
+ #include "fonts/ArrivalItalic12.h"
+ #include "fonts/ArrivalItalic9.h"
+-#include "DisplayDirection.h"
++#include <cctype>
+ 
+ namespace {
+ uint16_t etaColor(uint8_t opacity) { return pallete::arrivalBadgeText(opacity); }
++std::string displayDirection(const std::string& value) {
++  std::string lower=value;
++  for(char& c:lower) c=char(std::tolower(static_cast<unsigned char>(c)));
++  if(lower.find("east")!=std::string::npos) return "East";
++  if(lower.find("west")!=std::string::npos) return "West";
++  if(lower.find("south")!=std::string::npos) return "South";
++  if(lower.find("north")!=std::string::npos) return "North";
++  constexpr const char* prefix="Platform ";
++  return value.rfind(prefix,0)==0 ? value.substr(9) : value;
++}
+ std::string routeAbbreviation(const std::string& label) {
+   if (label == "Green" || label == "GRN") return "GRN";
+   if (label == "Blue" || label == "BLU") return "BLU";
+@@ -152,7 +162,7 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
+     for(int row=0;row<h;++row)
+       std::copy_n(pixels+(y+row)*width+x,w,transitionShell.data()+row*w);
+     if(group==0) {
+-      if(fields&2) text(TransitDisplay::displayDirection(platform.direction),width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
++      if(fields&2) text(displayDirection(platform.direction),width-103,23,85,pallete::secondaryText(),1,true,&FreeSans12pt7b);
+       if(fields&1) text(platform.stationName,18,23,width-129,pallete::primaryText(),1,false,&BarlowCondensedSemiBold28);
+     } else if(group==footerGroup()) {
+       drawDistanceGauge(platform.distanceValue,platform.distanceUnit);
+@@ -379,7 +389,7 @@ void ArrivalScreen::draw(uint32_t now) {
+   if(full) drawInstrumentShell();
+   if (full || renderedPlatform.stationName!=platform.stationName || renderedPlatform.direction!=platform.direction) {
+     surface().fillRect(8,1,width-16,29,pallete::background());
+-    text(TransitDisplay::displayDirection(platform.direction), width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
++    text(displayDirection(platform.direction), width-103, 23, 85, pallete::secondaryText(), 1, true, &FreeSans12pt7b);
+     text(platform.stationName, padding+10, 23, width-129, pallete::primaryText(), 1, false, &BarlowCondensedSemiBold28);
+     surface().drawFastHLine(padding,31,width-padding*2,pallete::detail());
+     if (state.hasData) DebugLog.printf("[UI] Platform %u/%u: %s / %s\n",
+diff --git a/arduino/sketch_cta_ble_demo/src/products/transit/ui/DisplayDirection.h b/arduino/sketch_cta_ble_demo/src/products/transit/ui/DisplayDirection.h
+deleted file mode 100644
+index f72ac30..0000000
+--- a/arduino/sketch_cta_ble_demo/src/products/transit/ui/DisplayDirection.h
++++ /dev/null
+@@ -1,24 +0,0 @@
+-#pragma once
+-#include <cctype>
+-#include <string>
+-
+-namespace TransitDisplay {
+-inline std::string displayDirection(const std::string& value) {
+-  std::string lower=value;
+-  for(char& c:lower) c=char(std::tolower(static_cast<unsigned char>(c)));
+-  // Match the phone's N. East / N. West / S. East / S. West convention
+-  // before the cardinal substring checks. Normalize only the compound prefix.
+-  std::string compact;
+-  for(char c:lower) if(c!='.' && c!='-' && !std::isspace(static_cast<unsigned char>(c))) compact+=c;
+-  if(compact.rfind("northeast",0)==0 || compact.rfind("neast",0)==0) return "N. East";
+-  if(compact.rfind("northwest",0)==0 || compact.rfind("nwest",0)==0) return "N. West";
+-  if(compact.rfind("southeast",0)==0 || compact.rfind("seast",0)==0) return "S. East";
+-  if(compact.rfind("southwest",0)==0 || compact.rfind("swest",0)==0) return "S. West";
+-  if(lower.find("east")!=std::string::npos) return "East";
+-  if(lower.find("west")!=std::string::npos) return "West";
+-  if(lower.find("south")!=std::string::npos) return "South";
+-  if(lower.find("north")!=std::string::npos) return "North";
+-  constexpr const char* prefix="Platform ";
+-  return value.rfind(prefix,0)==0 ? value.substr(9) : value;
+-}
+-}
+diff --git a/arduino/sketch_cta_ble_demo/tests/display_direction_test.cpp b/arduino/sketch_cta_ble_demo/tests/display_direction_test.cpp
+deleted file mode 100644
+index d25d3a4..0000000
+--- a/arduino/sketch_cta_ble_demo/tests/display_direction_test.cpp
++++ /dev/null
+@@ -1,21 +0,0 @@
+-#include "../src/products/transit/ui/DisplayDirection.h"
+-#include <cassert>
+-#include <iostream>
+-#include <utility>
+-int main() {
+-  const std::pair<const char*,const char*> cases[] = {
+-    {"North","North"},{"South","South"},{"East","East"},{"West","West"},
+-    {"northBOUND","North"},{"SOUTHBOUND","South"},{"Eastbound","East"},{"westbound","West"},
+-    {"N.East","N. East"},{"N.West","N. West"},{"S.East","S. East"},{"S.West","S. West"},
+-    {"N. East","N. East"},{"N. West","N. West"},{"S. East","S. East"},{"S. West","S. West"},
+-    {"n.eAsT","N. East"},{"NORTHWEST","N. West"},{"southeastbound","S. East"},{"SouthWest","S. West"},
+-    {"North East","N. East"},{"North-West","N. West"},{"SOUTH EAST","S. East"},{"south-westbound","S. West"},
+-    {"Platform 3","3"},{"platform 3","platform 3"},{"Inbound","Inbound"},{"To Downtown","To Downtown"},
+-    {"Main East","East"},{"Northampton East","East"},{"NE","NE"},{"", ""}
+-  };
+-  for(const auto& item:cases) {
+-    const auto actual=TransitDisplay::displayDirection(item.first);
+-    if(actual!=item.second) { std::cerr<<item.first<<": got "<<actual<<", expected "<<item.second<<"\n"; return 1; }
+-  }
+-  std::cout<<"PASS cardinal/compound direction display, accepted case/spelling variants and unchanged fallback\n";
+-}

@@ -1,0 +1,29 @@
+diff --git a/Trainpod/Platform/BLE/BluetoothService.swift b/Trainpod/Platform/BLE/BluetoothService.swift
+index 369f31b..755d2d2 100644
+--- a/Trainpod/Platform/BLE/BluetoothService.swift
++++ b/Trainpod/Platform/BLE/BluetoothService.swift
+@@ -352,7 +352,6 @@ final class BluetoothService: NSObject, ObservableObject {
+     }
+ 
+     private func resumeDataPath(_ peripheral: CBPeripheral) {
+-        guard self.peripheral === peripheral, peripheral.state == .connected, central.state == .poweredOn else { return }
+         guard bindingAllowsConnection, !writeRetirement.blocks(peripheral), !dataPathStarted else { return }
+         connectedDeviceId = nil; writableCharacteristic = nil
+         identityVerificationTask?.cancel()
+@@ -1079,16 +1078,11 @@ extension BluetoothService: CBPeripheralDelegate {
+         Task { @MainActor in
+             guard peripheral === self.peripheral, characteristic === writableCharacteristic else { return }
+             if let error {
+-                dataPathStarted = false
+-                writableCharacteristic = nil
+                 setConnectionState(.error("ACK subscription failed: \(error.localizedDescription)"))
+             } else if characteristic.isNotifying {
+-                guard connectionState != .connected else { return }
+                 log("ACK notification subscription confirmed")
+                 setConnectionState(.connected)
+             } else {
+-                dataPathStarted = false
+-                writableCharacteristic = nil
+                 setConnectionState(.error("ACK notifications are disabled. Reconnect before testing."))
+             }
+         }

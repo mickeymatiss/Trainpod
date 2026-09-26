@@ -1,0 +1,175 @@
+diff --git a/Trainpod/Products/Transit/Themes/DeviceUIColor.swift b/Trainpod/Products/Transit/Themes/DeviceUIColor.swift
+index bb9cff4..52ee3be 100644
+--- a/Trainpod/Products/Transit/Themes/DeviceUIColor.swift
++++ b/Trainpod/Products/Transit/Themes/DeviceUIColor.swift
+@@ -120,8 +120,6 @@ final class DeviceUIColor: ObservableObject {
+         bluetooth.uiColorAcknowledgementHandler = { [weak self] in self?.receive($0) }
+         bluetooth.uiColorConnectionStateHandler = { [weak self] state in
+             guard state != .connected, let self else { return }
+-            // A confirmation belongs to this connection, not the next selected device.
+-            self.deviceTheme = nil
+             self.liveEnabled = false
+             guard self.pendingToken != nil else { return }
+             self.fail("Connection ended before confirmation. Hold the device button for two seconds, then retry when connected.")
+diff --git a/tests/ios/README.md b/tests/ios/README.md
+deleted file mode 100644
+index 0c90de2..0000000
+--- a/tests/ios/README.md
++++ /dev/null
+@@ -1,15 +0,0 @@
+-# Focused theme-controller characterization
+-
+-This separate simulator harness compiles the actual `DeviceUIColor` and `DeviceTheme` sources. Two small transport-facing doubles expose readiness, callbacks and captured control packets; they do not implement CoreBluetooth, persistence or radio behavior.
+-
+-Supply an already booted iOS 26.5+ simulator and an output directory outside the checkout:
+-
+-```sh
+-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer python3 tests/run_theme_controller_test.py --device SIMULATOR_UDID --output /tmp/keytrain-theme-check
+-```
+-
+-The runner builds a tiny UIKit test app, signs it ad hoc for the simulator, installs/runs it, and uninstalls it afterward. It never boots, shuts down or erases the supplied simulator and does not modify the app project. Do not run concurrent copies on the same simulator: they use the same temporary bundle ID. It checks an explicit PASS marker because `simctl launch` can return zero after an app assertion failure.
+-
+-Cases cover A confirming X, switching to B without carrying confirmation, live edit to X on B, switching back to A, same-connection deduplication, explicit manual Push and six fields plus the commit packet. A/B are connection-boundary events supplied to the real controller, not physical devices. Awaiting sends uses actor yields with a bounded iteration/process deadline; the check does not use network or BLE hardware. The harness failed against the original controller at the stale-confirmation assertion and passed after F05.
+-
+-This is separate from the macOS Swift/C++ host runner; UIKit is required. Physical theme delivery/persistence and actual two-device BLE switching remain manual checks.
+diff --git a/tests/ios/ThemeTransportSupport.swift b/tests/ios/ThemeTransportSupport.swift
+deleted file mode 100644
+index afa275d..0000000
+--- a/tests/ios/ThemeTransportSupport.swift
++++ /dev/null
+@@ -1,17 +0,0 @@
+-import Foundation
+-import Combine
+-
+-// Controller-only doubles: no CoreBluetooth objects or BLE algorithm is modeled.
+-@MainActor final class BluetoothService: ObservableObject {
+-    enum ConnectionState: Equatable { case connected, disconnected, connecting }
+-    @Published var notificationsReady = true
+-    var uiColorAcknowledgementHandler: ((Data) -> Void)?
+-    var uiColorConnectionStateHandler: ((ConnectionState) -> Void)?
+-}
+-@MainActor final class MessageBridge {
+-    var controlSendReadyHandler: (() -> Void)?
+-    var canSend = true
+-    var isSending = false
+-    var sends: [[Data]] = []
+-    func sendControls(_ commands: [Data]) async throws { sends.append(commands) }
+-}
+diff --git a/tests/ios/theme_controller_test.swift b/tests/ios/theme_controller_test.swift
+deleted file mode 100644
+index 107a3ba..0000000
+--- a/tests/ios/theme_controller_test.swift
++++ /dev/null
+@@ -1,72 +0,0 @@
+-import Foundation
+-import UIKit
+-
+-struct ThemeControllerChecks {
+-    @MainActor static func main() async {
+-        let bluetooth = BluetoothService(), bridge = MessageBridge()
+-        let controller = DeviceUIColor(bluetooth: bluetooth, bridge: bridge)
+-        let x = controller.selectedTheme
+-        let y = controller.themes.first { $0.colors != x.colors }!
+-        func acknowledge() {
+-            let packet = String(data: bridge.sends.last![0], encoding: .utf8)!
+-            let token = packet.split(separator: ":")[1]
+-            bluetooth.uiColorAcknowledgementHandler?(Data("TA:\(token):\(controller.selectedTheme.fingerprint)".utf8))
+-        }
+-        func waitForSends(_ count: Int) async {
+-            for _ in 0..<10000 {
+-                if bridge.sends.count >= count { return }
+-                await Task.yield()
+-            }
+-            preconditionFailure("Expected theme send \(count)")
+-        }
+-        // A confirms X using the real token/fingerprint/controller path.
+-        controller.push()
+-        await waitForSends(1)
+-        precondition(bridge.sends[0].count == 7) // Six fields + commit, unchanged.
+-        acknowledge()
+-        precondition(controller.deviceTheme == x && controller.pushState == .success)
+-        controller.liveEnabled = true
+-        controller.selectedThemeID = y.id
+-        controller.selectedThemeID = x.id
+-        for _ in 0..<100 { await Task.yield() }
+-        precondition(bridge.sends.count == 1, "Same-connection confirmed X must deduplicate")
+-
+-        // Switch to B: selection persists, confirmation must not.
+-        bluetooth.uiColorConnectionStateHandler?(.disconnected)
+-        precondition(controller.deviceTheme == nil, "A's confirmation leaked into B's connection")
+-        precondition(controller.selectedTheme == x && !controller.liveEnabled)
+-        bluetooth.uiColorConnectionStateHandler?(.connected)
+-        controller.selectedThemeID = y.id
+-        controller.liveEnabled = true
+-        controller.selectedThemeID = x.id
+-        await waitForSends(2)
+-        acknowledge()
+-        precondition(controller.deviceTheme == x)
+-
+-        // Back to A: B's X confirmation must not suppress A's next edit to X.
+-        bluetooth.uiColorConnectionStateHandler?(.connecting)
+-        precondition(controller.deviceTheme == nil)
+-        bluetooth.uiColorConnectionStateHandler?(.connected)
+-        controller.selectedThemeID = y.id
+-        controller.liveEnabled = true
+-        controller.selectedThemeID = x.id
+-        await waitForSends(3)
+-        acknowledge()
+-        // Manual Push remains explicit even for an already confirmed palette.
+-        controller.push()
+-        await waitForSends(4)
+-        acknowledge()
+-        precondition(controller.pushState == .success)
+-        print("PASS real theme controller: A/B/A confirmation invalidation, same-device dedup, live edit, manual Push, six-field payload")
+-    }
+-}
+-
+-@main final class ThemeHarnessApp: UIResponder, UIApplicationDelegate {
+-    func application(_ application: UIApplication, didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+-        Task { @MainActor in
+-            await ThemeControllerChecks.main()
+-            exit(0)
+-        }
+-        return true
+-    }
+-}
+diff --git a/tests/run_theme_controller_test.py b/tests/run_theme_controller_test.py
+deleted file mode 100644
+index 2710f5b..0000000
+--- a/tests/run_theme_controller_test.py
++++ /dev/null
+@@ -1,34 +0,0 @@
+-#!/usr/bin/env python3
+-"""Focused UIKit controller harness on a supplied booted simulator; never boots/erases it."""
+-import argparse, pathlib, platform, plistlib, subprocess, sys
+-ROOT = pathlib.Path(__file__).resolve().parents[1]
+-p = argparse.ArgumentParser()
+-p.add_argument('--device', required=True, help='UDID of an already booted iOS simulator')
+-p.add_argument('--output', required=True, type=pathlib.Path)
+-p.add_argument('--controller-source', type=pathlib.Path, help='Optional baseline source for a red/green comparison')
+-a = p.parse_args()
+-out = a.output.resolve()
+-if out == ROOT or ROOT in out.parents: p.error('--output must be outside the checkout')
+-out.mkdir(parents=True, exist_ok=True)
+-app = out/'ThemeControllerChecks.app'
+-app.mkdir(exist_ok=True)
+-bundle_id = 'org.keytrain.characterization.theme'
+-(app/'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': bundle_id, 'CFBundleName': 'ThemeControllerChecks', 'CFBundleExecutable': 'theme_controller_test', 'CFBundlePackageType': 'APPL', 'CFBundleVersion': '1', 'CFBundleShortVersionString': '1.0', 'LSRequiresIPhoneOS': True, 'MinimumOSVersion': '26.5'}))
+-sdk = subprocess.check_output(['xcrun', '--sdk', 'iphonesimulator', '--show-sdk-path'], text=True).strip()
+-controller = a.controller_source or ROOT/'Trainpod/Products/Transit/Themes/DeviceUIColor.swift'
+-cmd = ['xcrun', '--sdk', 'iphonesimulator', 'swiftc', '-target', platform.machine()+'-apple-ios26.5-simulator', '-sdk', sdk,
+-       '-module-cache-path', str(out/'swift-cache'), str(ROOT/'tests/ios/theme_controller_test.swift'),
+-       str(ROOT/'tests/ios/ThemeTransportSupport.swift'), str(controller),
+-       str(ROOT/'Trainpod/Products/Transit/Themes/Model/DeviceTheme.swift'), '-o', str(app/'theme_controller_test')]
+-subprocess.run(cmd, check=True, timeout=120)
+-subprocess.run(['codesign', '--force', '--sign', '-', str(app)], check=True, timeout=30)
+-subprocess.run(['xcrun', 'simctl', 'install', a.device, str(app)], check=True, timeout=30)
+-try:
+-    result = subprocess.run(['xcrun', 'simctl', 'launch', '--console', a.device, bundle_id], check=True, timeout=60, text=True, capture_output=True)
+-    print(result.stdout, end='')
+-    print(result.stderr, end='', file=sys.stderr)
+-    # simctl may itself exit zero after the test app crashes. Require its success marker.
+-    if 'PASS real theme controller:' not in result.stdout:
+-        raise SystemExit('Theme harness did not report success')
+-finally:
+-    subprocess.run(['xcrun', 'simctl', 'uninstall', a.device, bundle_id], check=True, timeout=30)

@@ -183,30 +183,39 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** test(ui): characterize agency retry policy; await decision [F13].
 - **Rollback:** test/report additions only, no product behavior to revert.
 
-## Campaign progress
+## Campaign disposition
 
-F01–F05 and F09–F12 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+Ten production passes are committed. F13 is characterized but requires a product decision. C1–C7 have not started: the requested sequential gate prevents continuing through an unresolved policy pass. This is a partial campaign with an explicit stop, not a claim that the cleanup campaign is complete.
+
+The separate commits are bounded, but accumulating reports and a shared registry make several raw `git revert` operations conflict. F01 also overlaps later local BLE guards. Prepared reverse patches in `rollback/` preserve unrelated later changes; see AggregateVerification for their actual verification limits. F09 rollback removes its cross-session assertion from the later F10 integration fixture while preserving F10's render-certainty fix. No history has been squashed or rewritten.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1A | F01 | `d022b55` | BLE wait/retirement/ownership: PASS | 18 host PASS; Xcode PASS | F01-M1–M4 | PASS — MANUAL VERIFICATION REQUIRED | Yes, independent commit |
-
-| 1B | F02 | `faa100f` | State trace + Xcode PASS; callbacks manual | 18 host PASS | F02-M1–M5 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local guard/reset changes |
-
-| 1C | F03 | `5993694` | A/B source trace, ownership harness, Xcode PASS | 18 host PASS | F03-M1 | PASS — MANUAL VERIFICATION REQUIRED | Yes, local ordering change |
-
-| 2 | F04 | `ef8e34d` | CTA cache fixtures: PASS (red before fix) | 19 host PASS; Xcode PASS | No | PASS | Yes, isolated cache policy |
-
-| 3A | F05 | `708640f` | Actual controller simulator: PASS (red before fix) | 19 host PASS; Xcode PASS | F05-M1–M2 | PASS — MANUAL VERIFICATION REQUIRED | Yes, one controller assignment |
-
-| 3B | F09 | `e21552d` | Scope/retention + existing diagnostics PASS | 20 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, diagnostics only |
-
-| 4 | F10 | `203159c` | Render evidence fixtures + diagnostic suite PASS | 21 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, report only |
-
-| 5 | F12 | `fe53a58` | Deadline + refresh flow PASS | 22 host PASS; ESP32-C6 compile PASS | Optional F12-M1 wake | PASS | Yes, local deadline state |
-
-| 6 | F11 | `27fc013` | Display label fixtures PASS (red before fix) | 23 host PASS; ESP32-C6 compile PASS | F11-M1 visual label | PASS — MANUAL VERIFICATION REQUIRED | Yes, display-only helper |
+| 1A | F01 | `d022b55` | Write wait/retirement ownership PASS | 18 host PASS | Required | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
+| 1B | F02 | `faa100f` | Source transition trace + Xcode; physical callbacks pending | 18 host PASS | Required | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
+| 1C | F03 | `5993694` | Source A/B trace + ownership helper PASS; physical callbacks pending | 18 host PASS | Required | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
+| 2 | F04 | `ef8e34d` | Cache fixtures PASS | 19 host PASS | No | PASS | Bounded reverse patch; host-tested, see limits |
+| 3A | F05 | `708640f` | Actual controller simulator PASS | 19 host PASS | Required, two devices | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
+| 3B | F09 | `e21552d` | Diagnostic scope/retention PASS | 20 host PASS | Optional export | PASS | Bounded reverse patch; host-tested, see limits |
+| 4 | F10 | `203159c` | Render evidence PASS | 21 host PASS | Optional export | PASS | Bounded reverse patch; host-tested, see limits |
+| 5 | F12 | `fe53a58` | Deadline/refresh flow PASS | 22 host PASS | Optional wake | PASS | Bounded reverse patch; host-tested, see limits |
+| 6 | F11 | `27fc013` | Direction fixtures PASS | 23 host PASS | Required visual label | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
+| 7A | F14 | `a7dc7a9` | Equal ETA identity PASS | 24 host PASS | Optional UI | PASS | Bounded reverse patch; host-tested, see limits |
+| 7B | F13 | `0598a14` | Stepped-clock policy PASS | 24 host PASS | No change | BLOCKED — DESIGN DECISION REQUIRED | Test/report only |
+| 8A | C1 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8B | C2 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8C | C3 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8D | C4 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8E | C5 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8F | C6 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 8G | C7 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
 
 ## Deliberately unchanged
 
-F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+- **F13:** choose continued 60-second nearby retry for all agencies, stop-until-user-refresh for all, or retain/document the existing difference. No production policy is inferred.
+- **C1–C7:** held at the explicit sequential gate. No documentation cleanup, runner redesign, dependency/provider/experiment deletion, grouping relocation or formatter cleanup was performed. Their merits have not been reassessed during this campaign.
+- **F06:** unsolicited developer-send framing; **F08:** setup/display-mode partial success; **F15:** freshness/retained-board contract; **F16:** station backfill; **F17:** platform identity/grouping; **F18:** ownership/authentication/security; **F19+:** provider/network policy. Explicitly outside scope.
+- **F07:** shared location waiters was not in the authorized implementation list.
+- Power architecture, BLE availability policy, renderer architecture, diagnostic firmware purge, provisioning, protocol versions and broad naming remain unchanged.
+
+Remaining limitations are recorded under each implemented pass: host continuation tests do not establish OS radio behavior; valid-but-incorrect cache metadata is not repaired; diagnostic session IDs are not global physical-device identities; missing render evidence remains unknown; display fixtures do not prove pixels. No hardware success is claimed.

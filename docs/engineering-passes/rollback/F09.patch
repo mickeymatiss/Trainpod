@@ -1,0 +1,255 @@
+diff --git a/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift b/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
+index fe89a28..8895e4c 100644
+--- a/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
++++ b/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
+@@ -185,8 +185,7 @@ nonisolated enum DiagnosticInterleave {
+             var pending: [String: [Int]] = [:]
+             for i in indices {
+                 let event = events[i]
+-                let sessionScope = event.session == "unassigned" && event.transaction != nil ? event.id : event.session
+-                let key = "\(event.source)|\(event.boot ?? "?")|\(sessionScope)|\(event.transaction ?? "-")"
++                let key = "\(event.source)|\(event.boot ?? "?")|\(event.session)|\(event.transaction ?? "-")"
+                 if event.code == pair.start { pending[key, default: []].append(i); continue }
+                 guard pair.ends.contains(event.code) else { continue }
+                 let candidates = pending[key] ?? []
+@@ -329,31 +328,19 @@ nonisolated enum DiagnosticInterleave {
+         return out.joined(separator: "\n") + "\n"
+     }
+ 
+-    private struct PayloadScope: Hashable {
+-        let transaction: String
+-        let session: String
+-        let unassignedEvent: String
+-    }
+-
+     private static func payloadTransactions(_ events: [Event], collected: Int64?) -> [String] {
+-        let identified = events.filter { $0.transaction != nil }
+-        guard !identified.isEmpty else { return ["No transaction IDs in this export (legacy firmware/app or no retained requests)."] }
+-        let groups = Dictionary(grouping: identified) { event in
+-            // Without session evidence, even equal boot/request IDs do not prove
+-            // common ownership. Keep each unassigned event explicitly separate.
+-            PayloadScope(transaction: event.transaction!, session: event.session,
+-                         unassignedEvent: event.session == "unassigned" ? event.id : "")
+-        }.map { ($0.key, $0.value) }.sorted {
++        let ids = Set(events.compactMap(\.transaction))
++        guard !ids.isEmpty else { return ["No transaction IDs in this export (legacy firmware/app or no retained requests)."] }
++        let groups = ids.map { id in (id, events.filter { $0.transaction == id }) }.sorted {
+             let a = $0.1.compactMap(\.unix).min() ?? .max, b = $1.1.compactMap(\.unix).min() ?? .max
+-            return a == b ? ($0.0.transaction, $0.0.session, $0.0.unassignedEvent) < ($1.0.transaction, $1.0.session, $1.0.unassignedEvent) : a < b
++            return a == b ? $0.0 < $1.0 : a < b
+         }
+         var output: [String] = []
+         let stages = Set(["DATA_REQUEST_SENT", "DEVICE_DATA_REQUEST_RECEIVED", "DATA_REQUEST_COALESCED", "FETCH_STARTED", "FETCH_SUCCESS", "FETCH_FAILURE",
+             "BLE_RESPONSE_BEGIN", "BLE_RESPONSE_QUEUED", "BLE_RESPONSE_WRITE_CONFIRMED", "BLE_RESPONSE_WRITE_FAILED",
+             "RESPONSE_RX_STARTED", "RESPONSE_RX_COMPLETE", "RESPONSE_RX_FAILED", "PAYLOAD_PARSE_STARTED", "PAYLOAD_PARSE_SUCCESS", "PAYLOAD_PARSE_FAILURE",
+             "DATA_APPLIED", "DATA_APPLIED_ACK_RECEIVED", "DATA_APPLIED_ACK_REJECTED", "DATA_APPLIED_ACK_TIMEOUT", "DISPLAY_UPDATED"])
+-        for (scope, trace) in groups {
+-            let id = scope.transaction
++        for (id, trace) in groups {
+             func has(_ code: String) -> Bool { trace.contains { $0.code == code } }
+             let start = trace.first { $0.code == "DATA_REQUEST_SENT" } ?? trace.first!
+             let latest = trace.compactMap(\.unix).max()
+@@ -377,7 +364,6 @@ nonisolated enum DiagnosticInterleave {
+             let end = trace.last { $0.code == "DISPLAY_UPDATED" } ?? trace.last { $0.code == "DATA_APPLIED_ACK_RECEIVED" } ?? trace.last!
+             let duration = start.source == end.source ? end.uptime-start.uptime : (start.unix != nil && end.unix != nil ? end.unix!-start.unix! : nil)
+             output.append("TRANSACTION \(id) — \(outcome)" + (duration.map { " — ≈"+String(format: "%.3fs",Double($0)/1000) } ?? ""))
+-            output.append(scope.session == "unassigned" ? "  session=unassigned; events not joined" : "  session=\(scope.session)")
+             output.append("  Classification describes retained stage evidence, not a hardware root cause. Missing stages can also reflect unavailable logs.")
+             if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && !has("DISPLAY_UPDATED") {
+                 output.append("  No transaction-scoped display completion is retained. Supersession, pending rendering, failure and missing logs cannot be distinguished here.")
+diff --git a/Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift b/Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift
+index 90861d0..6cca6bd 100644
+--- a/Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift
++++ b/Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift
+@@ -24,30 +24,16 @@ nonisolated final class PhoneDiagnosticLog: @unchecked Sendable {
+     let processId = UUID().uuidString
+     private let lock = NSLock()
+     private var entries: [PhoneDiagnosticEvent] = []
+-    private struct TransactionKey: Hashable {
+-        let session: String
+-        let transaction: String
+-        init?(session: String, transaction: String) {
+-            let session = session.lowercased()
+-            guard !session.isEmpty, session != "00000000" else { return nil }
+-            self.session = session
+-            self.transaction = transaction
+-        }
+-    }
+-    private var transactionOrder: [TransactionKey] = []
+-    private var transactionEvents: [TransactionKey: [PhoneDiagnosticEvent]] = [:]
++    private var transactionOrder: [String] = []
++    private var transactionEvents: [String: [PhoneDiagnosticEvent]] = [:]
+     private var sequence: UInt64 = 0
+     private var session = ""
+-    var currentSessionId: String {
+-        if let scoped = PhoneDiagnosticContext.sessionId { return scoped }
+-        lock.lock(); defer { lock.unlock() }; return session
+-    }
++    var currentSessionId: String { lock.lock(); defer { lock.unlock() }; return session }
+     func setSession(_ id: String) { lock.lock(); session = id; lock.unlock() }
+-    func retainTransaction(_ id: String, sessionId: String? = nil) {
++    func retainTransaction(_ id: String) {
+         lock.lock(); defer { lock.unlock() }
+-        guard let key = TransactionKey(session: sessionId ?? PhoneDiagnosticContext.sessionId ?? session, transaction: id),
+-              !transactionOrder.contains(key) else { return }
+-        transactionOrder.append(key); transactionEvents[key] = []
++        guard !transactionOrder.contains(id) else { return }
++        transactionOrder.append(id); transactionEvents[id] = []
+         while transactionOrder.count > 5 { transactionEvents.removeValue(forKey: transactionOrder.removeFirst()) }
+     }
+     func record(_ code: String, sessionId: String? = nil, level: String = "INFO", value1: Int64 = 0, value2: Int64 = 0, transactionId: String? = nil, chunk: Int? = nil, chunks: Int? = nil, bytes: Int? = nil, writeMode: String? = nil, durationMs: Int64? = nil, errorCode: String? = nil) {
+@@ -57,13 +43,12 @@ nonisolated final class PhoneDiagnosticLog: @unchecked Sendable {
+         let event = PhoneDiagnosticEvent(sequence: sequence,
+             unixTimeMs: Int64(Date().timeIntervalSince1970 * 1000),
+             uptimeMs: UInt64(ProcessInfo.processInfo.systemUptime * 1000),
+-            sessionId: sessionId ?? PhoneDiagnosticContext.sessionId ?? session, eventCode: code, level: level, value1: value1, value2: value2, transactionId: tx, chunk: chunk, chunks: chunks, bytes: bytes,
++            sessionId: sessionId ?? session, eventCode: code, level: level, value1: value1, value2: value2, transactionId: tx, chunk: chunk, chunks: chunks, bytes: bytes,
+             writeMode: writeMode, durationMs: durationMs, errorCode: errorCode)
+         entries.append(event)
+-        if let tx, let key = TransactionKey(session: event.sessionId, transaction: tx),
+-           transactionEvents[key] != nil, !code.contains("CHUNK") {
+-            transactionEvents[key]!.append(event)
+-            if transactionEvents[key]!.count > 64 { transactionEvents[key]!.remove(at: 1) }
++        if let tx, transactionEvents[tx] != nil, !code.contains("CHUNK") {
++            transactionEvents[tx]!.append(event)
++            if transactionEvents[tx]!.count > 64 { transactionEvents[tx]!.remove(at: 1) }
+         }
+         if entries.count > 512 { entries.removeFirst(entries.count - 512) }
+     }
+diff --git a/Trainpod/Platform/Transport/PayloadDelivery.swift b/Trainpod/Platform/Transport/PayloadDelivery.swift
+index 5a2968c..58e700b 100644
+--- a/Trainpod/Platform/Transport/PayloadDelivery.swift
++++ b/Trainpod/Platform/Transport/PayloadDelivery.swift
+@@ -39,5 +39,4 @@ nonisolated enum PayloadDelivery {
+ 
+ nonisolated enum PhoneDiagnosticContext {
+     @TaskLocal static var transactionId: String?
+-    @TaskLocal static var sessionId: String?
+ }
+diff --git a/Trainpod/Products/Transit/BLE/RefreshRequestHandler.swift b/Trainpod/Products/Transit/BLE/RefreshRequestHandler.swift
+index 5af6988..f525b46 100644
+--- a/Trainpod/Products/Transit/BLE/RefreshRequestHandler.swift
++++ b/Trainpod/Products/Transit/BLE/RefreshRequestHandler.swift
+@@ -71,7 +71,7 @@ final class RefreshRequestHandler: ObservableObject {
+     deinit { sendTask?.cancel(); deadlineTask?.cancel() }
+ 
+     private func receiveRequest(at timestamp: Date, backgrounded: Bool, transaction: PayloadTransaction?) {
+-        if let transaction { PhoneDiagnosticLog.shared.retainTransaction(transaction.id, sessionId: bluetooth.diagnosticSessionId) }
++        if let transaction { PhoneDiagnosticLog.shared.retainTransaction(transaction.id) }
+         PhoneDiagnosticLog.shared.record("DEVICE_DATA_REQUEST_RECEIVED", sessionId: bluetooth.diagnosticSessionId, transactionId: transaction?.id)
+         guard !bluetooth.diagnosticsInProgress else { return }
+         requestCount = defaults.integer(forKey: "backgroundRefreshRequestCount") + 1
+@@ -170,7 +170,6 @@ final class RefreshRequestHandler: ObservableObject {
+         }
+         sendTask = Task { [weak self] in
+             guard let self else { return }
+-            await PhoneDiagnosticContext.$sessionId.withValue(diagnosticSession) {
+             await PhoneDiagnosticContext.$transactionId.withValue(transaction?.id) {
+             defer {
+                 // Failed/cancelled resolution is retryable, never a completed payload.
+@@ -252,7 +251,6 @@ final class RefreshRequestHandler: ObservableObject {
+                 print("[E2E] \(self.status)")
+             }
+             }
+-            }
+         }
+     }
+ 
+diff --git a/tests/diagnostic_render_test.swift b/tests/diagnostic_render_test.swift
+index ea363c5..59fd2f9 100644
+--- a/tests/diagnostic_render_test.swift
++++ b/tests/diagnostic_render_test.swift
+@@ -30,12 +30,10 @@ import Foundation
+                                  [ack, event(2, "DATA_APPLIED_ACK_RECEIVED", "1-2")])
+         precondition(overlap.contains("TRANSACTION 1-1 — APPLIED / ACKNOWLEDGED — DISPLAY COMPLETION UNKNOWN"))
+         precondition(overlap.contains("TRANSACTION 1-2 — SUCCESS"))
+-        let scopes = try report([applied, event(2, "DISPLAY_UPDATED", "1-1", "b")], [ack])
+-        precondition(scopes.contains("DISPLAY COMPLETION UNKNOWN") && !scopes.contains("TRANSACTION 1-1 — SUCCESS"))
+         let failed = try report([event(1, "PAYLOAD_PARSE_FAILURE")], [])
+         precondition(failed.contains("DEVICE PAYLOAD PARSE FAILURE"), "Explicit retained failures must remain visible")
+         if CommandLine.arguments.count > 1 {
+-            try [success, missing, serialSupersession, truncated, overlap, scopes, failed].joined(separator: "\n=== NEXT FIXTURE ===\n")
++            try [success, missing, serialSupersession, truncated, overlap, failed].joined(separator: "\n=== NEXT FIXTURE ===\n")
+                 .write(toFile: CommandLine.arguments[1], atomically: true, encoding: .utf8)
+         }
+         print("PASS render evidence: confirmed completion, missing/truncated evidence, unjoined serial supersession, overlap, scoped IDs, explicit parse failure")
+diff --git a/tests/diagnostic_scope_test.swift b/tests/diagnostic_scope_test.swift
+deleted file mode 100644
+index 4c5205b..0000000
+--- a/tests/diagnostic_scope_test.swift
++++ /dev/null
+@@ -1,61 +0,0 @@
+-import Foundation
+-
+-@main struct DiagnosticScopeChecks {
+-    static func event(_ sequence: Int, _ code: String, _ session: String?) -> [String: Any] {
+-        var row: [String: Any] = ["sequence": sequence, "uptimeMs": sequence * 10,
+-            "unixTimeMs": 1000 + sequence * 10, "eventCode": code, "level": "INFO", "transactionId": "1-1"]
+-        if let session { row["sessionId"] = session }
+-        return row
+-    }
+-    static func render(_ phone: [[String: Any]], _ device: [[String: Any]] = []) throws -> String {
+-        try DiagnosticInterleave.render(JSONSerialization.data(withJSONObject:
+-            ["device": ["metadata": ["bootId": 1], "deviceLogs": device], "phoneLogs": phone, "collectedAtUnixMs": 6000]))
+-    }
+-    static func headings(_ text: String) -> [String] { text.components(separatedBy: "\n").filter { $0.hasPrefix("TRANSACTION ") } }
+-    static func main() throws {
+-        // Same textual transaction, interleaved scope A and B. Combining these
+-        // fragments would fabricate a successful transaction that neither proves.
+-        let mixed = try render([event(1, "DEVICE_DATA_REQUEST_RECEIVED", "a"), event(2, "DATA_APPLIED_ACK_RECEIVED", "b")],
+-                               [event(1, "DATA_APPLIED", "a"), event(2, "DISPLAY_UPDATED", "b")])
+-        precondition(headings(mixed).count == 2, "Different connection sessions were conflated")
+-        precondition(!headings(mixed).contains { $0.contains("SUCCESS") })
+-        let same = try render([event(1, "DATA_APPLIED_ACK_RECEIVED", "a")],
+-                              [event(1, "DATA_APPLIED", "a"), event(2, "DISPLAY_UPDATED", "a")])
+-        precondition(headings(same).count == 1 && headings(same)[0].contains("SUCCESS"))
+-        // Missing evidence is not guessed from matching boot/request text.
+-        let unknown = try render([event(1, "DATA_APPLIED_ACK_RECEIVED", nil)],
+-                                 [event(1, "DATA_APPLIED", nil), event(2, "DISPLAY_UPDATED", nil)])
+-        precondition(!headings(unknown).contains { $0.contains("SUCCESS") })
+-        precondition(unknown.contains("session=unassigned; events not joined"))
+-
+-        let unknownSpans = DiagnosticInterleave.normalizedEvents([
+-            "device": [:], "phoneLogs": [event(1, "FETCH_STARTED", nil), event(2, "FETCH_SUCCESS", nil)]])
+-        precondition(DiagnosticInterleave.cleaned(unknownSpans).allSatisfy { $0.references.count == 1 },
+-                     "Missing session evidence must not pair unknown transactions in the timeline")
+-
+-        // Five retained transactions means five scoped transactions, not one
+-        // bucket containing arbitrary devices' identical boot/request strings.
+-        let log = PhoneDiagnosticLog()
+-        for id in ["a", "b", "c", "d", "e", "f"] {
+-            log.setSession(id)
+-            log.retainTransaction("1-1")
+-            log.record("RETAINED", transactionId: "1-1")
+-        }
+-        for _ in 0..<520 { log.record("NOISE") }
+-        let retained = log.snapshot().filter { $0.eventCode == "RETAINED" }
+-        precondition(retained.map(\.sessionId) == ["b", "c", "d", "e", "f"])
+-        // A late task keeps the session captured when its request began, even
+-        // after another device becomes the logger's current session.
+-        PhoneDiagnosticContext.$sessionId.withValue("old") {
+-            PhoneDiagnosticContext.$transactionId.withValue("1-1") {
+-                log.setSession("new")
+-                precondition(log.currentSessionId == "old")
+-                log.record("LATE_TASK")
+-            }
+-        }
+-        precondition(log.snapshot().last!.sessionId == "old")
+-        precondition(log.currentSessionId == "new")
+-        if CommandLine.arguments.count > 1 { try mixed.write(toFile: CommandLine.arguments[1], atomically: true, encoding: .utf8) }
+-        print("PASS diagnostic session-scoped reconstruction, legacy known-session grouping, explicit unassigned evidence, scoped retention")
+-    }
+-}
+diff --git a/tests/run_tests.py b/tests/run_tests.py
+index b6a5a2b..223e553 100644
+--- a/tests/run_tests.py
++++ b/tests/run_tests.py
+@@ -27,7 +27,7 @@ P='Trainpod/Products/Transit/'
+ common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
+ manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
+ swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+-extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
++extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
+ for name,(sources,arguments) in extra.items():
+     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
+ for name,sources,arguments in swift:

@@ -1,32 +1,25 @@
-# Aggregate verification — through F11
+# Aggregate verification
 
-This is an interim aggregate, not completion of the whole campaign. F01, F02 and F03 are PASS — MANUAL VERIFICATION REQUIRED. Later passes remain outstanding.
+Ten bounded production passes completed; F13 stopped for the requested policy decision. C1–C7 remain unstarted. Work is on `engineering/bounded-campaign` in the isolated campaign checkout. Original source checkout and main were not modified; nothing was pushed.
 
-F02 additionally passed the normal Xcode simulator build and all 18 host executables on a clean cache. Its initial symlinked-cache run failed during module loading; the successful run used an independent cache, with unchanged sources/fixtures. F02 callback transitions remain manual obligations.
+## Final results
 
-F03 passed all 18 host executables and the normal Xcode simulator build. Its actual A/B callback sequence remains manual; source tracing and pure ownership tests are not CoreBluetooth integration coverage.
+- **24 standard host executables PASS:** 11 Swift and 13 C++.
+- **One additional deterministic host characterization PASS:** nearby retry policy; deliberately separate from the standard runner.
+- **One additional simulator controller harness PASS:** actual DeviceUIColor/DeviceTheme with narrow transport doubles (F05). Its old-source run failed the stale-confirmation assertion and the fixed-source run passed. This was performed at the F05 commit; later passes do not change those sources.
+- **Normal Xcode Debug iOS Simulator build PASS** after the final production changes; no signing/project changes.
+- **ESP32-C6 firmware target compile PASS** after the final changes; no upload/build-configuration changes.
+- Public MTA smoke harness compiled but was **not run**. Legacy eta_render_test remains **manual**.
+- **No physical hardware test was performed.** Manual obligations are listed below.
 
-Latest aggregate after F04: **19 executable harnesses PASS** (eight Swift, eleven C++), plus the Xcode simulator build. CTA cache recovery was characterized with a failing pre-fix test and passing post-fix fixtures.
+## Every standard harness
 
-F05: all 19 host executables and the normal Xcode simulator build PASS. A separate UIKit app harness compiled the real theme controller/model: the pre-fix source failed the stale-confirmation assertion and the fixed source passed all A/B/A, deduplication and manual-Push cases. This is one additional simulator harness, not part of the 19 host count or hardware proof. Temporary simulator removed after verification.
-
-Latest after F09: **20 host executables PASS** (nine Swift, eleven C++), plus Xcode simulator build PASS. Session reconstruction/retention tests were red before the fix and pass afterward. The formatted two-scope fixture was inspected.
-
-Latest after F10: **21 host executables PASS** (ten Swift, eleven C++), plus Xcode simulator build PASS. Seven formatted report fixtures inspected; missing render completion is explicitly unknown.
-
-Latest after F12: **22 host executables PASS** (ten Swift, twelve C++). New deadline horizon/wake/cooldown fixtures PASS.
-
-Latest after F11: **23 host executables PASS** (ten Swift, thirteen C++). Compound display labels characterized red/green; ESP32-C6 target compile PASS again after this change. Visual fit remains manual.
-
-## Host suite
-
-Before F01: 17 executable harnesses PASS. After F01: **18 PASS**, **one compiled-only**, **one manual**. Seven Swift and eleven firmware C++ harnesses executed. The added wait test compiles production state/continuation code directly, not CoreBluetooth mocks.
-
-| Harness | Status |
+| Harness | Final status |
 | --- | --- |
 | platform_formatter_test | PASS |
 | mta_arrivals_test | PASS |
 | transit_manifest_test | PASS |
+| nearby_arrival_identity_test | PASS |
 | diagnostic_render_test | PASS |
 | diagnostic_scope_test | PASS |
 | cta_cache_test | PASS |
@@ -50,47 +43,77 @@ Before F01: 17 executable harnesses PASS. After F01: **18 PASS**, **one compiled
 | firmware_refresh_flow_test | PASS |
 | firmware_transit_buffer_test | PASS |
 
-Commands used `python3 tests/run_tests.py --output <external-directory>`; all artifacts stayed outside the checkout. The new test was also compiled/run directly before integration. The original raw-continuation experiment is retained as historical evidence and is not part of the passing production-harness count.
+## Reproduction and scope
 
-## iOS target build
-
-**BUILD SUCCEEDED**, normal Debug generic iOS Simulator build after F01, using the installed Xcode via command-scoped `DEVELOPER_DIR`. Project, signing and dependency settings were unchanged. Existing `bluetoothCentrals` deprecation and App Intents metadata warnings remain unrelated. No simulator UI test or physical BLE success is claimed.
+From the campaign checkout:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project 'KeyTrain Connect.xcodeproj' -scheme 'KeyTrain Connect' -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath <external-derived-data> build
+python3 tests/run_tests.py --output /tmp/keytrain-host-tests
+python3 tests/run_nearby_retry_policy_test.py --output /tmp/keytrain-policy-test
 ```
 
-## Firmware target
+The standard runner compiles actual production logic, with its existing platform support. It does not test CoreBluetooth callbacks. The F13 runner checks there is exactly one production 60-second sleep expression, copies the view model outside the checkout, and replaces only that expression with a stepped test clock. Provider/environment doubles select success/error outcomes. This test protects agency branching, not networking or OS timer behavior. Two exploratory wall-clock runs failed an elapsed-time assumption and are not counted as passing tests.
 
-**COMPILE PASS** after F12. Arduino IDE monitor metadata identified `esp32:esp32:esp32c6`; the installed ESP32 3.3.11 core and CLI compiled the actual sketch using that FQBN with no board-option overrides or configuration changes. Program 941024 bytes (71%), globals 192688 bytes (58%). No firmware upload or hardware run. Build outputs are outside the checkout; extra CLI-generated sketch build files were moved out before committing.
+Theme simulator instructions are in `tests/ios/README.md`. The harness is separate because UIKit requires an iOS simulator. The temporary simulator used for F05 was shut down and deleted; existing simulators were not altered.
+
+Xcode command (external derived-data path omitted here for portability):
 
 ```sh
-arduino-cli compile --config-file <existing-arduino-cli.yaml> --fqbn esp32:esp32:esp32c6 --build-path <external-build-directory> --output-dir <external-output-directory> --jobs 2 arduino/sketch_cta_ble_demo
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild \
+  -project 'KeyTrain Connect.xcodeproj' -scheme 'KeyTrain Connect' \
+  -configuration Debug -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/keytrain-derived-data build
 ```
 
-## Cross-platform contracts
+ESP32 compile used Arduino IDE's installed arduino-cli, its existing config, core **3.3.11**, and FQBN **esp32:esp32:esp32c6** found in installed Arduino metadata. No option overrides. Final compile: **941626 bytes program storage**, **192688 bytes global memory**. External build/output paths used; CLI-created sketch build artifacts moved outside the checkout. This establishes compilation for the discovered target, not physical wiring or radio/display success.
 
-The Swift and C++ protocol contract harnesses both passed against the existing shared TP2 fixtures and P1 header. Formatter-generated platform and MTA payloads were also consumed successfully by the firmware harnesses. Production serialization, checksum, capacity, framing and parser code are unchanged. This establishes baseline golden compatibility, not any unimplemented pass.
+Pre-existing Xcode deprecation/App Intents warnings remain. A preliminary F02 cache-symlink build failed during module loading; rerunning with a real independent cache passed without changing fixtures. Those failed experiments are retained in the evidence archive.
 
-Protocol fixture SHA-256 values at the verified baseline (unchanged after F01):
+## Cross-platform invariants
 
-| File | SHA-256 |
+Swift and C++ protocol harnesses passed the shared TP2/P1 fixtures, including checksum, malformed/incomplete input and near-capacity cases. Protocol fixtures are byte-identical to baseline `297bcc5`. Generated `platform.txt` and `mta.txt` are byte-identical to the original campaign baseline. Production formatter/TransitMessage, framing and parser code are unchanged. F11 changes only the rendered interpretation of compound direction labels, not serialized bytes.
+
+The verification manifest records SHA-256 for each fixture and generated payload. Golden fixtures were not updated to accommodate any change.
+
+## Rollback verification
+
+All ten production commits retain their own conceptual boundaries. Raw reverse application was checked in a throwaway clone: shared reports conflict for older commits; the dense runner registry also conflicts where multiple tests were registered. F01 has two nearby BLE guard overlaps with later passes. No claim of conflict-free raw `git revert` is made.
+
+Prepared reverse patches remove one pass's production changes and dedicated tests while retaining later unrelated work. They omit cumulative report rewinds. F01 keeps F02's active-peer check and F03's disconnect ownership guard. F09 also removes the F09-dependent cross-session assertion from the later F10 test; its render-certainty checks remain. The standard host suite was run after each individual reverse patch at the combined production head, with no failures. F13 subsequently adds only a separate test and report and does not overlap these patches.
+
+| Removed finding | Remaining standard harnesses PASS |
 | --- | --- |
-| README.md | 7877a239c3cecf038ac8c17af6885bcb9f8b47df5d3b4b9a8ef2eedd60f64d72 |
-| agencies.tp2 | 6a1dfaab7fc1cf82ca120628f0fe53c4da2345bf5dc8b13dda555bcf12002d71 |
-| bad_checksum.tp2 | f0c53cd6a25c19b19286fb95166ca740c360fe8a773717f2d9531e90f885b018 |
-| bad_record.tp2 | 72a18cbe4bee6b6704b2ef2130789b3e40bd91f3e195b1822a509582613df5e0 |
-| cta.header | 6938ba3d99fedf55785a3aab7a0c8e77a8f3a27e729f1f5e281247dc90db31a2 |
-| cta.tp2 | 60cdb48ad6cac5c081393b3e77fffca6c5d7e72b50726ff9cbb82d7b0a5e0978 |
-| identity.tp2 | 9cacb41cd242621938baf428fd06b2444914975b4137f48171e6b31a9ca50256 |
-| incomplete.tp2 | 3cdd160cfbcc91773af356fc9eb8b46b5468cfe6637424a652d5bf46ab16d63c |
-| index.tsv | f7bd4e514b609b0c8f99527d36697328959b4c884bbccd447b2d0ff245964e43 |
-| inputs.json | 706c559ba1aa3f7662bb58ce6f16f1ee7b770ebbf402862a6c574900c0047974 |
-| long_names.tp2 | f21c4bf49bc4e2d3dc5bd3395beb815d99857638472662c7f77c4ffda2d31b0a |
-| mta_empty.tp2 | 306bd2cdc30cc99e99e3e762f46b84d2997fa25d74d5e5934aa2bd0dfce3d1bd |
-| near_limit.tp2 | 47caf4f96a6eb9b54e0c6ce2513f3a808957f4c4bdbac51f6779247fb0d44d0a |
-| unavailable.tp2 | 2a0a27ce60a93f04b71b17fa6802a3e170591d379c3b202ae41488f86a73a6e6 |
+| F01 | 23 |
+| F02 | 24 |
+| F03 | 24 |
+| F04 | 23 |
+| F05 | 24 |
+| F09 | 23 |
+| F10 | 23 |
+| F12 | 23 |
+| F11 | 23 |
+| F14 | 23 |
 
-## Rollback and remaining verification
+These rollback checks prove patch applicability and remaining host tests, not native builds or hardware behavior for each reverted combination. Reverting a reliability fix deliberately restores its previous defect. Before applying a patch to a future changed checkout, use `git apply --check`, review the diff, then repeat native/manual checks relevant to that pass. Do not apply the reverse patch and also revert the same commit.
 
-F01 changes two BLE implementation files, adds its focused host test, registers that test, and updates reports. It leaves wire serialization, MessageBridge, retry/request machinery and firmware unchanged. Its implementation commit is independently revertible. F01-M1 through F11-M4 in PassResults.md remain physical/manual obligations. The final aggregate run and combined manual map will be produced after subsequent passes.
+## Combined manual session — not yet performed
+
+| Scenario | Findings / commits | What to check |
+| --- | --- | --- |
+| Cold boot, normal and repeated refresh; background request | F01 `d022b55`, F02 `faa100f` | Normal writes/ACKs; no unnecessary retirement; sender remains available. |
+| Cancel an actually outstanding response write using debugger timing; allow reconnect and next refresh | F01 `d022b55` | Exactly one resolution, connection retirement, no reuse before disconnect, late old completion cannot satisfy new write, next send succeeds. |
+| Cancel before submission, after completion, and during no-response readiness | F01 `d022b55` | No response-retirement unless an unresolved response write existed; no-response wait releases and future send works. |
+| Disconnect/reconnect, Bluetooth interruption, subscription failure/disable and legitimate resume | F01 `d022b55`, F02 `faa100f` | Recovery; retry does not use stale peripheral; duplicate subscription success does not duplicate startup. |
+| A→B switch with delayed A callbacks; theme X on A/B/A | F03 `5993694`, F05 `708640f` | B clock/session untouched by A; B receives unconfirmed X; same-device dedup and manual Push preserved; persistence smoke. Two physical devices if available. |
+| Ordinary standby/wake | F12 `fe53a58` | Optional wake/refresh smoke. Long dormant interval itself is deterministic arithmetic coverage, not a claim of weeks on hardware. |
+| Page/navigation transitions and available compound direction in standard/compact display | F11 `27fc013` | Correct N./S. East/West text and fit, unchanged navigation. |
+| Diagnostic export, ideally after A/B use | F09 `e21552d`, F10 `203159c` | Sessions remain distinct; absent DISPLAY_UPDATED is unknown rather than proven render failure. Optional export integration check. |
+| Nearby list with equal ETAs | F14 `a7dc7a9` | Optional visual confirmation of two rows and unchanged order/content. |
+
+Detailed forced BLE boundary scenarios are in PassResults. Host builds cannot replace them. CTA cache recovery and diagnostic classification are deterministic; no new radio-specific checks are imposed for those passes.
+
+## Human-readable assessment
+
+The changes preserve the working architecture. The important fixes release abandoned transport waits, prevent stale device state from contaminating later work, keep a disposable cache from defeating valid transit data, and make diagnostics more honest. Firmware changes are limited to two deadline assignments and pure direction text.
+
+The largest remaining uncertainty is still real CoreBluetooth timing: the host tests prove KeyTrain's state ownership, while the hardware session must verify actual disconnect/reconnect behavior. The nearby retry discrepancy needs a product choice, not a guess. Stopping here leaves useful, tested improvements and a clean policy boundary; it does not imply the rest of the code needs rewriting.

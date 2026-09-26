@@ -1,0 +1,84 @@
+diff --git a/arduino/sketch_cta_ble_demo/src/products/transit/ble/BleIntegration.cpp b/arduino/sketch_cta_ble_demo/src/products/transit/ble/BleIntegration.cpp
+index c764456..a47143e 100644
+--- a/arduino/sketch_cta_ble_demo/src/products/transit/ble/BleIntegration.cpp
++++ b/arduino/sketch_cta_ble_demo/src/products/transit/ble/BleIntegration.cpp
+@@ -657,7 +657,6 @@ void setTransitRefreshPaused(bool paused) {
+   const bool changed=refreshFlow.paused()!=paused;
+   if(changed) {
+     if(paused) { endUpdateLocked("FAILED","paused");failFetchEpisode(); fetchEpisode=false; }
+-    else nextUpdateMs=RefreshFlow::rearmUpdateDeadlineAfterWake(nextUpdateMs,millis());
+     refreshFlow.setPaused(paused);
+     // Ignore a late/incomplete pre-standby response; wake will request a new board.
+     transitText.reset();
+@@ -668,7 +667,7 @@ void setTransitRefreshPaused(bool paused) {
+   }
+   xSemaphoreGive(receiverMutex);
+   if(paused && changed && bleSession) bleSession->abortSession("session suspended for standby");
+-  if(!paused && changed) nextSessionAttemptMs=millis();
++  if(!paused && changed) nextSessionAttemptMs=0;
+   if(changed) DebugLog.println(paused ? "[DATA] Standby: NEED_DATA paused; RAM board retained" : "[DATA] Wake: needsData=true; NEED_DATA resumes");
+ }
+ void finishTransitRefresh(bool success) {
+diff --git a/arduino/sketch_cta_ble_demo/src/products/transit/ble/RefreshFlow.h b/arduino/sketch_cta_ble_demo/src/products/transit/ble/RefreshFlow.h
+index e6a0b83..31db1f0 100644
+--- a/arduino/sketch_cta_ble_demo/src/products/transit/ble/RefreshFlow.h
++++ b/arduino/sketch_cta_ble_demo/src/products/transit/ble/RefreshFlow.h
+@@ -7,11 +7,6 @@ public:
+   static constexpr uint32_t DATA_MAX_AGE_MS=60000;
+   static constexpr uint32_t RESPONSE_TIMEOUT_MS=5000;
+   static constexpr uint32_t SLOW_RETRY_MS=5000;
+-  // Only a remaining five-second cooldown is meaningful after standby. An old
+-  // signed deadline can otherwise look billions of milliseconds into the future.
+-  static uint32_t rearmUpdateDeadlineAfterWake(uint32_t deadline,uint32_t now) {
+-    return uint32_t(deadline-now)<=SLOW_RETRY_MS ? deadline : now;
+-  }
+   bool hasTransitData() const { return hasData_; }
+   uint32_t lastDataReceivedMs() const { return received_; }
+   bool stale(uint32_t now) const { return !hasData_ || uint32_t(now-received_)>=DATA_MAX_AGE_MS; }
+diff --git a/arduino/sketch_cta_ble_demo/tests/refresh_deadline_test.cpp b/arduino/sketch_cta_ble_demo/tests/refresh_deadline_test.cpp
+deleted file mode 100644
+index ee2c1dd..0000000
+--- a/arduino/sketch_cta_ble_demo/tests/refresh_deadline_test.cpp
++++ /dev/null
+@@ -1,41 +0,0 @@
+-#include "../src/products/transit/ble/RefreshFlow.h"
+-#include <cassert>
+-#include <cstdio>
+-
+-// This is the unchanged comparison at the episode/session admission boundary.
+-static bool due(uint32_t now,uint32_t deadline) { return int32_t(now-deadline)>=0; }
+-int main() {
+-  static_assert(RefreshFlow::SLOW_RETRY_MS==5000);
+-  static_assert(RefreshFlow::DATA_MAX_AGE_MS==60000);
+-  static_assert(RefreshFlow::RESPONSE_TIMEOUT_MS==5000);
+-  const auto rearm=RefreshFlow::rearmUpdateDeadlineAfterWake;
+-  assert(!due(5099,5100) && due(5100,5100));
+-  assert(rearm(5100,200)==5100); // Short standby preserves the outstanding cooldown.
+-  assert(rearm(5100,5099)==5100 && !due(5099,rearm(5100,5099)));
+-  assert(due(5100,rearm(5100,5100)));
+-  assert(due(100000,rearm(5100,100000))); // Ordinary expired deadline.
+-  const uint32_t start=UINT32_MAX-2000u, wrapped=start+5000u;
+-  assert(!due(start+4999u,wrapped) && due(start+5000u,wrapped));
+-  assert(rearm(wrapped,start+1000u)==wrapped);
+-  assert(due(start+6000u,rearm(wrapped,start+6000u)));
+-  const uint32_t deadline=5100u;
+-  const uint32_t shortStandby=deadline+0x7fffffffu;
+-  assert(due(shortStandby,deadline));
+-  assert(due(shortStandby,rearm(deadline,shortStandby)));
+-  const uint32_t longStandby=deadline+0x80001000u;
+-  assert(!due(longStandby,deadline)); // Characterizes the pre-fix failure.
+-  const uint32_t awakened=rearm(deadline,longStandby);
+-  assert(awakened==longStandby && due(longStandby,awakened));
+-  assert(!due(longStandby,0)); // Zero is not an immediate deadline at long uptime.
+-  assert(due(longStandby,longStandby)); // Existing wake now rearms the session at now.
+-  const uint32_t next=longStandby+RefreshFlow::SLOW_RETRY_MS;
+-  assert(!due(longStandby+4999u,next) && due(longStandby+5000u,next));
+-  assert(rearm(next,longStandby+1000u)==next); // Another short sleep cannot bypass retry.
+-  RefreshFlow flow;
+-  flow.finish(true,100); flow.setPaused(true); flow.setPaused(false);
+-  assert(flow.needsData(longStandby));
+-  assert(flow.requestRefresh(longStandby,true,true));
+-  flow.finish(true,longStandby);
+-  assert(!flow.needsData(longStandby+59999u) && flow.needsData(longStandby+60000u));
+-  puts("PASS episode deadline before/wrap/half-range/long standby, wake rearm, retained cooldown, subsequent retry/freshness");
+-}

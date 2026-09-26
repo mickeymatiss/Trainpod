@@ -1,0 +1,85 @@
+diff --git a/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift b/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
+index fe89a28..5e810b3 100644
+--- a/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
++++ b/Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift
+@@ -365,7 +365,7 @@ nonisolated enum DiagnosticInterleave {
+             } else if has("PAYLOAD_PARSE_FAILURE") { outcome = "DEVICE PAYLOAD PARSE FAILURE" }
+             else if has("BLE_RESPONSE_WRITE_FAILED") { outcome = "PHONE / COREBLUETOOTH TRANSMISSION FAILURE" }
+             else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && has("DISPLAY_UPDATED") { outcome = "SUCCESS" }
+-            else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") { outcome = "APPLIED / ACKNOWLEDGED — DISPLAY COMPLETION UNKNOWN" }
++            else if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && !has("DISPLAY_UPDATED") && settled { outcome = "DISPLAY / RENDER FAILURE" }
+             else if has("PAYLOAD_PARSE_SUCCESS") && !has("DATA_APPLIED") && settled { outcome = "DEVICE APPLICATION STATE FAILURE" }
+             else if has("RESPONSE_RX_STARTED") && !has("RESPONSE_RX_COMPLETE") && (has("DATA_APPLIED_ACK_TIMEOUT") || has("RESPONSE_RX_FAILED")) { outcome = "BLE FRAME / CHUNK DELIVERY FAILURE" }
+             else if has("BLE_RESPONSE_QUEUED") && !has("RESPONSE_RX_STARTED") && has("DATA_APPLIED_ACK_TIMEOUT") { outcome = "BLE DELIVERY / DEVICE RX START FAILURE" }
+@@ -379,9 +379,6 @@ nonisolated enum DiagnosticInterleave {
+             output.append("TRANSACTION \(id) — \(outcome)" + (duration.map { " — ≈"+String(format: "%.3fs",Double($0)/1000) } ?? ""))
+             output.append(scope.session == "unassigned" ? "  session=unassigned; events not joined" : "  session=\(scope.session)")
+             output.append("  Classification describes retained stage evidence, not a hardware root cause. Missing stages can also reflect unavailable logs.")
+-            if has("DATA_APPLIED") && has("DATA_APPLIED_ACK_RECEIVED") && !has("DISPLAY_UPDATED") {
+-                output.append("  No transaction-scoped display completion is retained. Supersession, pending rendering, failure and missing logs cannot be distinguished here.")
+-            }
+             for event in trace where stages.contains(event.code) || event.level == "WARN" || event.level == "ERROR" {
+                 let relative = event.source == start.source ? event.uptime-start.uptime : (event.unix != nil && start.unix != nil ? event.unix!-start.unix! : nil)
+                 let delta = relative.map { String(format: "%+.3fs",Double($0)/1000) } ?? "time unknown"
+diff --git a/tests/diagnostic_render_test.swift b/tests/diagnostic_render_test.swift
+deleted file mode 100644
+index ea363c5..0000000
+--- a/tests/diagnostic_render_test.swift
++++ /dev/null
+@@ -1,43 +0,0 @@
+-import Foundation
+-
+-@main struct DiagnosticRenderChecks {
+-    static func event(_ sequence: Int, _ code: String, _ tx: String = "1-1", _ session: String = "a") -> [String: Any] {
+-        ["sequence": sequence, "uptimeMs": sequence * 10, "unixTimeMs": 1000 + sequence * 10,
+-         "timestampSynced": true, "eventCode": code, "level": "INFO", "transactionId": tx, "sessionId": session]
+-    }
+-    static func report(_ device: [[String: Any]], _ phone: [[String: Any]], serial: String? = nil) throws -> String {
+-        var root: [String: Any] = ["device": ["metadata": ["bootId": 1], "deviceLogs": device],
+-                                   "phoneLogs": phone, "collectedAtUnixMs": 9000]
+-        // Serial-only evidence may be available alongside an export, but the
+-        // current export schema provides no transaction-to-render-generation join.
+-        // This annotation is deliberately NOT a new supported export field.
+-        if let serial { root["testExternalSerialEvidence"] = serial }
+-        return try DiagnosticInterleave.render(JSONSerialization.data(withJSONObject: root))
+-    }
+-    static func main() throws {
+-        let applied = event(1, "DATA_APPLIED"), ack = event(1, "DATA_APPLIED_ACK_RECEIVED")
+-        let success = try report([applied, event(2, "DISPLAY_UPDATED")], [ack])
+-        precondition(success.contains("TRANSACTION 1-1 — SUCCESS"))
+-        let missing = try report([applied], [ack])
+-        precondition(missing.contains("DISPLAY COMPLETION UNKNOWN"), "Missing completion was overstated as a render failure")
+-        precondition(!missing.contains("DISPLAY / RENDER FAILURE"))
+-        let serialSupersession = try report([applied], [ack], serial: "[INFO] RENDER_SUPERSEDED generation=42 elapsed=8ms")
+-        precondition(serialSupersession.contains("DISPLAY COMPLETION UNKNOWN"))
+-        precondition(!serialSupersession.contains("— SUPERSEDED"), "Unjoined serial evidence cannot prove a transaction outcome")
+-        let truncated = try report([], [ack])
+-        precondition(truncated.contains("INCOMPLETE / IN PROGRESS") && !truncated.contains("RENDER FAILURE"))
+-        let overlap = try report([applied, event(2, "DATA_APPLIED", "1-2"), event(3, "DISPLAY_UPDATED", "1-2")],
+-                                 [ack, event(2, "DATA_APPLIED_ACK_RECEIVED", "1-2")])
+-        precondition(overlap.contains("TRANSACTION 1-1 — APPLIED / ACKNOWLEDGED — DISPLAY COMPLETION UNKNOWN"))
+-        precondition(overlap.contains("TRANSACTION 1-2 — SUCCESS"))
+-        let scopes = try report([applied, event(2, "DISPLAY_UPDATED", "1-1", "b")], [ack])
+-        precondition(scopes.contains("DISPLAY COMPLETION UNKNOWN") && !scopes.contains("TRANSACTION 1-1 — SUCCESS"))
+-        let failed = try report([event(1, "PAYLOAD_PARSE_FAILURE")], [])
+-        precondition(failed.contains("DEVICE PAYLOAD PARSE FAILURE"), "Explicit retained failures must remain visible")
+-        if CommandLine.arguments.count > 1 {
+-            try [success, missing, serialSupersession, truncated, overlap, scopes, failed].joined(separator: "\n=== NEXT FIXTURE ===\n")
+-                .write(toFile: CommandLine.arguments[1], atomically: true, encoding: .utf8)
+-        }
+-        print("PASS render evidence: confirmed completion, missing/truncated evidence, unjoined serial supersession, overlap, scoped IDs, explicit parse failure")
+-    }
+-}
+diff --git a/tests/run_tests.py b/tests/run_tests.py
+index b6a5a2b..80ec590 100644
+--- a/tests/run_tests.py
++++ b/tests/run_tests.py
+@@ -27,7 +27,7 @@ P='Trainpod/Products/Transit/'
+ common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
+ manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
+ swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+-extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
++extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
+ for name,(sources,arguments) in extra.items():
+     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
+ for name,sources,arguments in swift:
