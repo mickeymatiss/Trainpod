@@ -1,11 +1,11 @@
 # Aggregate verification
 
-Ten bounded production passes completed; F13 stopped for the requested policy decision. C1–C7 remain unstarted. Work is on `engineering/bounded-campaign` in the isolated campaign checkout. Original source checkout and main were not modified; nothing was pushed.
+Eleven bounded production passes completed, including the user-approved F13 policy. C1–C7 remain unstarted; this follow-up changed only F13. Work is on `engineering/bounded-campaign` in the isolated campaign checkout. Original source checkout and main were not modified; nothing was pushed.
 
 ## Final results
 
 - **24 standard host executables PASS:** 11 Swift and 13 C++.
-- **One additional deterministic host characterization PASS:** nearby retry policy; deliberately separate from the standard runner.
+- **One additional deterministic host characterization PASS:** nearby retry recovery for all four agencies, retained arrivals/timestamp, cadence, user refresh and cancellation; deliberately separate from the standard runner.
 - **One additional simulator controller harness PASS:** actual DeviceUIColor/DeviceTheme with narrow transport doubles (F05). Its old-source run failed the stale-confirmation assertion and the fixed-source run passed. This was performed at the F05 commit; later passes do not change those sources.
 - **Normal Xcode Debug iOS Simulator build PASS** after the final production changes; no signing/project changes.
 - **ESP32-C6 firmware target compile PASS** after the final changes; no upload/build-configuration changes.
@@ -79,7 +79,7 @@ The verification manifest records SHA-256 for each fixture and generated payload
 
 All ten production commits retain their own conceptual boundaries. Raw reverse application was checked in a throwaway clone: shared reports conflict for older commits; the dense runner registry also conflicts where multiple tests were registered. F01 has two nearby BLE guard overlaps with later passes. No claim of conflict-free raw `git revert` is made.
 
-Prepared reverse patches remove one pass's production changes and dedicated tests while retaining later unrelated work. They omit cumulative report rewinds. F01 keeps F02's active-peer check and F03's disconnect ownership guard. F09 also removes the F09-dependent cross-session assertion from the later F10 test; its render-certainty checks remain. The standard host suite was run after each individual reverse patch at the combined production head, with no failures. F13 subsequently adds only a separate test and report and does not overlap these patches.
+Prepared reverse patches remove one pass's production changes and dedicated tests while retaining later unrelated work. They omit cumulative report rewinds. F01 keeps F02's active-peer check and F03's disconnect ownership guard. F09 also removes the F09-dependent cross-session assertion from the later F10 test; its render-certainty checks remain. The standard host suite was run after each individual reverse patch at the combined production head, with no failures. The later F13 fix touches the Nearby view model and its own test, not the production/test files changed by these ten reverse patches. F13 itself has its own production/test commit; its reverse was not included in that earlier ten-pass matrix.
 
 | Removed finding | Remaining standard harnesses PASS |
 | --- | --- |
@@ -116,4 +116,12 @@ Detailed forced BLE boundary scenarios are in PassResults. Host builds cannot re
 
 The changes preserve the working architecture. The important fixes release abandoned transport waits, prevent stale device state from contaminating later work, keep a disposable cache from defeating valid transit data, and make diagnostics more honest. Firmware changes are limited to two deadline assignments and pure direction text.
 
-The largest remaining uncertainty is still real CoreBluetooth timing: the host tests prove KeyTrain's state ownership, while the hardware session must verify actual disconnect/reconnect behavior. The nearby retry discrepancy needs a product choice, not a guess. Stopping here leaves useful, tested improvements and a clean policy boundary; it does not imply the rest of the code needs rewriting.
+The largest remaining uncertainty is still real CoreBluetooth timing: the host tests prove KeyTrain's state ownership, while the hardware session must verify actual disconnect/reconnect behavior. The approved nearby policy now preserves loaded data and recovers on the normal cadence across all agencies. The remaining cleanup campaign is separate; these changes do not imply the rest of the code needs rewriting.
+
+## F13 follow-up verification
+
+The user approved periodic recovery on the existing 60-second cadence. Historical `0598a14` recorded the blocked decision; it is superseded by `fix(ui): keep nearby refresh alive after transient failures [F13]`.
+
+Before this change: historical policy characterization and all 24 host harnesses PASS. The new initial-recovery assertion failed on old code, then the full new four-agency characterization passed after the local view-model change. Expanded tests confirm complete retained arrival data and timestamps, no fetch without a stepped cadence tick, recovery with new data, user-triggered replacement, cancellation during initial/periodic fetch, and invalidated-context CancellationError termination. All 24 standard harnesses and normal Xcode simulator build PASS afterward. No firmware source changed; the earlier ESP32 target compile remains the applicable target result.
+
+Optional F13 manual smoke: interrupt foreground Nearby networking for multiple intervals, verify last loaded rows and original updated time persist, restore networking and observe the next normal refresh; leave the view and verify no future periodic requests. Not performed. Tests intentionally replace only the sleep expression in an external test copy and cannot establish OS scheduling/network behavior. Background device serving and provider fallback are untouched.

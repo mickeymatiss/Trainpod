@@ -29,10 +29,10 @@ final class NearbyStationsViewModel: ObservableObject {
         agency = TransitAgency.selected
         selectedStations = []
         refreshTask = Task {
-            guard await loadNearbyStationsAndRefresh() != nil else {
-                return
-            }
-
+            _ = await loadNearbyStationsAndRefresh()
+            guard !Task.isCancelled else { return }
+            // Initial failure stays visible, but the next attempt still belongs
+            // to the normal periodic loop.
             startRefreshLoop()
         }
     }
@@ -80,16 +80,17 @@ final class NearbyStationsViewModel: ObservableObject {
                 do {
                     try await Task.sleep(for: .seconds(60))
                     try Task.checkCancellation()
-                    if agency == .mta {
-                        _ = await loadNearbyStationsAndRefresh()
-                    } else {
-                        _ = try await refreshArrivals(showLoadingState: false)
-                    }
+                    _ = try await refreshArrivals(showLoadingState: false)
                 } catch is CancellationError {
                     return
                 } catch {
-                    state = .error(error.localizedDescription)
-                    return
+                    guard !Task.isCancelled else { return }
+                    // Keep the last successful board and its original timestamp.
+                    // Every failure waits for the next normal 60-second attempt.
+                    if case .loaded = state { } else {
+                        state = .error(error.localizedDescription)
+                    }
+                    FileLogger.shared.log("[REFRESH] Periodic UI refresh failed code=\((error as NSError).code)")
                 }
             }
         }

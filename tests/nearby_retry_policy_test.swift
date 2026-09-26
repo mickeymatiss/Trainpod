@@ -11,17 +11,28 @@ struct CTAStationRepository {}
 struct TransitDataCache { static let shared = Self() }
 struct FileLogger { static let shared = Self(); func log(_ text: String) {} }
 struct LiveTransitFormatter { static func directionLabel(_ id: String) -> String { id } }
-struct Sample { let stations: [StationArrivals] = []; let completedAt = Date() }
+struct Sample { let stations: [StationArrivals]; let completedAt: Date }
 enum OrdinaryFailure: Error { case unavailable }
 @MainActor final class LiveTransitProvider {
     static var created: [LiveTransitProvider] = []
     var calls = 0
-    var failFirst = false
+    var failCalls: Set<Int> = []
+    var cancelCalls: Set<Int> = []
+    var suspendNext = false
+    var completion: CheckedContinuation<Void, Never>?
     init() { Self.created.append(self) }
     func currentArrivals() async throws -> Sample {
         calls += 1
-        if failFirst || calls == 2 { throw OrdinaryFailure.unavailable }
-        return Sample()
+        if suspendNext {
+            suspendNext = false
+            await withCheckedContinuation { completion = $0 }
+        }
+        if cancelCalls.contains(calls) { throw CancellationError() }
+        if failCalls.contains(calls) { throw OrdinaryFailure.unavailable }
+        let station = CTAStation(id: String(calls), name: "Fixture", latitude: 41, longitude: -87, mapID: "1", stopIDs: ["1"])
+        let train = CTAArrival(id: String(calls), route: "Red", destination: "Fixture", arrivalTime: Date(timeIntervalSince1970: Double(calls + 300)), approaching: false, delayed: false, stationName: station.name, stopDescription: "North", directionID: "N")
+        let direction = DirectionArrivals(id: "N", name: "North", trains: [train])
+        return Sample(stations: [StationArrivals(station: station, directions: [direction])], completedAt: Date(timeIntervalSince1970: Double(calls)))
     }
 }
 @MainActor enum RetryTestClock {
@@ -41,51 +52,91 @@ enum OrdinaryFailure: Error { case unavailable }
 }
 @main struct NearbyRetryPolicyTest {
     @MainActor static func main() async throws {
-        var periodic: [(TransitAgency, NearbyStationsViewModel, LiveTransitProvider)] = []
-        var initial: [(NearbyStationsViewModel, LiveTransitProvider)] = []
         for agency in TransitAgency.allCases {
             TransitAgency.selected = agency
             let model = NearbyStationsViewModel()
             let provider = LiveTransitProvider.created.last!
+            provider.failCalls = [1, 2]
             model.findNearbyTrains()
-            periodic.append((agency, model, provider))
-            // findNearbyTrains captures agency synchronously.
-            let failed = NearbyStationsViewModel()
-            let failedProvider = LiveTransitProvider.created.last!
-            failedProvider.failFirst = true
-            failed.findNearbyTrains()
-            initial.append((failed, failedProvider))
-        }
-        TransitAgency.selected = .mta
-        let cancelled = NearbyStationsViewModel()
-        let cancelledProvider = LiveTransitProvider.created.last!
-        cancelled.findNearbyTrains()
-        await RetryTestClock.settle()
-        cancelled.stopRefreshing()
-        precondition(periodic.allSatisfy { $0.2.calls == 1 })
-        precondition(initial.allSatisfy { $0.1.calls == 1 })
-        precondition(RetryTestClock.waiters.count == 5)
-        RetryTestClock.advance()
-        await RetryTestClock.settle()
-        for (agency, model, provider) in periodic {
-            precondition(provider.calls == 2, "agency=\(agency) calls=\(provider.calls) state=\(model.state)")
-            guard case .error = model.state else { fatalError("ordinary error must be visible") }
-        }
-        RetryTestClock.advance()
-        await RetryTestClock.settle()
-        for (agency, model, provider) in periodic {
-            precondition(provider.calls == (agency == .mta ? 3 : 2))
-            if agency == .mta {
-                guard case .loaded = model.state else { fatalError("MTA must recover") }
-            } else {
-                guard case .error = model.state else { fatalError("non-MTA loop stops") }
+            await RetryTestClock.settle()
+            precondition(provider.calls == 1)
+            guard case .error = model.state else { fatalError("Initial error remains visible") }
+            precondition(RetryTestClock.waiters.count == 1, "Initial failure must leave one normal periodic attempt scheduled")
+            await RetryTestClock.settle()
+            precondition(provider.calls == 1, "No immediate retry")
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            precondition(provider.calls == 2 && RetryTestClock.waiters.count == 1)
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            precondition(provider.calls == 3)
+            let successful = model.state
+            guard case .loaded(let arrivals, let updatedAt) = successful else { fatalError("Initial recovery must load normally") }
+            precondition(arrivals.first?.station.id == "3" && updatedAt == Date(timeIntervalSince1970: 3))
+            provider.failCalls = [4, 5]
+            for expected in 4...5 {
+                RetryTestClock.advance()
+                await RetryTestClock.settle()
+                precondition(provider.calls == expected && model.state == successful, "Retain arrivals AND their original freshness timestamp")
+                precondition(RetryTestClock.waiters.count == 1)
+                await RetryTestClock.settle()
+                precondition(provider.calls == expected, "Repeated failure waits for another cadence tick")
             }
-            model.stopRefreshing()
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            guard case .loaded(let newer, let date) = model.state else { fatalError("Periodic recovery") }
+            precondition(newer.first?.station.id == "6" && date == Date(timeIntervalSince1970: 6))
+            // User-triggered refresh still executes immediately and owns one replacement loop.
+            model.findNearbyTrains()
+            await RetryTestClock.settle()
+            precondition(provider.calls == 7)
+            RetryTestClock.advance() // Includes the cancelled old sleeper; it must not fetch.
+            await RetryTestClock.settle()
+            precondition(provider.calls == 8 && RetryTestClock.waiters.count == 1)
+            model.stopRefreshing() // Same hook as NearbyStationsView.onDisappear.
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            precondition(provider.calls == 8 && RetryTestClock.waiters.isEmpty)
+
+            let active = NearbyStationsViewModel()
+            let activeProvider = LiveTransitProvider.created.last!
+            active.findNearbyTrains()
+            await RetryTestClock.settle()
+            let oldState = active.state
+            activeProvider.suspendNext = true
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            precondition(activeProvider.completion != nil)
+            active.stopRefreshing()
+            activeProvider.completion?.resume(); activeProvider.completion = nil
+            await RetryTestClock.settle()
+            precondition(active.state == oldState && RetryTestClock.waiters.isEmpty)
+
+            let invalidated = NearbyStationsViewModel()
+            let invalidatedProvider = LiveTransitProvider.created.last!
+            invalidatedProvider.cancelCalls = [2]
+            invalidated.findNearbyTrains()
+            await RetryTestClock.settle()
+            RetryTestClock.advance()
+            await RetryTestClock.settle()
+            precondition(invalidatedProvider.calls == 2 && RetryTestClock.waiters.isEmpty, "Provider context cancellation stays terminal for the old periodic loop")
+            invalidated.stopRefreshing()
+
+            let cancelled = NearbyStationsViewModel()
+            let pending = LiveTransitProvider.created.last!
+            pending.suspendNext = true
+            cancelled.findNearbyTrains()
+            await RetryTestClock.settle()
+            precondition(pending.completion != nil)
+            cancelled.stopRefreshing()
+            pending.completion?.resume(); pending.completion = nil
+            await RetryTestClock.settle()
+            precondition(pending.calls == 1 && RetryTestClock.waiters.isEmpty, "Cancelled initial work must not rearm the loop")
+            guard case .loaded = cancelled.state else {
+                print("PASS \(agency): initial/periodic recovery, retained data/date, cadence, manual refresh, teardown and in-flight cancellation")
+                continue
+            }
+            fatalError("Cancelled fetch must not publish")
         }
-        precondition(initial.allSatisfy { $0.1.calls == 1 })
-        precondition(cancelledProvider.calls == 1)
-        RetryTestClock.advance()
-        await RetryTestClock.settle()
-        print("PASS: current retry policy — initial errors stop all; periodic MTA recovers; CTA/BART/MBTA stop; cancellation stops.")
     }
 }

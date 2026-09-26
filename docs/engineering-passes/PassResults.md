@@ -170,22 +170,23 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 
 ## Pass 7B — F13
 
-**BLOCKED — DESIGN DECISION REQUIRED**
+**PASS** — user approved consistent 60-second Nearby UI recovery after the historical policy-only commit `0598a14`.
 
-- **Files changed:** tests/nearby_retry_policy_test.swift, tests/run_nearby_retry_policy_test.py and this report. No production change.
-- **Behavioral problem:** periodic MTA errors are caught by loadNearbyStationsAndRefresh and the loop continues; periodic CTA/BART/MBTA errors reach the outer catch and terminate the loop. Initial errors terminate startup for every agency.
-- **Characterization:** compile production view-model control flow and actual transit models with small provider/environment doubles. A test-only generated source replaces exactly one 60-second sleep expression with a stepped clock. No production seam, source edit, UI or networking framework added. All four agencies are exercised for initial failure, periodic failure, recovery or termination, plus cancellation. The generated source and binary remain outside the checkout.
-- **Targeted tests:** stepped-clock characterization PASS. Two preliminary real-timer attempts failed their timing assumption (MTA's first tick had not occurred by the assertion); those are retained as failed experiments, not counted as passed integration coverage. The deterministic test establishes control flow, not OS timer accuracy.
-- **Production change:** none. Source/comments/review do not establish whether the discrepancy is intentional. A retry policy decision is necessary; no inference from MTA's current behavior is treated as authorization.
-- **Broader tests:** final standard host suite 24 PASS; separate policy harness PASS. Xcode simulator and ESP32-C6 builds PASS.
-- **Manual verification required:** none for an unchanged policy; a future intentional policy fix should check foreground nearby refresh for the selected agency.
-- **Known remaining limitation:** MTA and the other three agencies retain different periodic-error behavior; background device refresh is not changed or covered by this UI harness.
-- **Commit message:** test(ui): characterize agency retry policy; await decision [F13].
-- **Rollback:** test/report additions only, no product behavior to revert.
+- **Files changed:** NearbyStationsViewModel.swift, tests/nearby_retry_policy_test.swift, PassResults.md and AggregateVerification.md. Existing test runner unchanged.
+- **Behavioral problem:** an initial ordinary error stopped startup; periodic CTA/BART/MBTA errors stopped their loops; MTA retried but replaced previously loaded arrivals with an error/loading state.
+- **Characterization added/used:** the existing test-only stepped timer compiles actual view-model control flow and production transit models. All four agencies now exercise two initial failures followed by success, two subsequent failures retaining the complete loaded state and original timestamp, later success with new data/date, exactly one attempt per clock advance, immediate user-triggered refresh replacing the old loop, stopRefreshing while asleep and during an active periodic fetch, cancellation during initial fetch, and provider CancellationError ending an invalidated periodic loop. The runner asserts that the production interval is still exactly 60 seconds. Small provider/environment doubles do not simulate networking or SwiftUI pixels.
+- **Production change:** initial load always hands ordinary failure recovery to the existing loop unless the owning task was cancelled. Every agency uses non-loading periodic refresh. Ordinary periodic errors preserve a loaded state; without loaded data, the error remains visible. Errors are logged and the next iteration waits the same 60 seconds. No immediate retry, backoff, provider, fallback, BLE or background/device change. User-triggered findNearbyTrains and freshArrivalsForBLESend retain their immediate entry behavior; the latter is unchanged.
+- **Targeted tests:** historical policy harness PASS before edits; new recovery fixture failed against old production at the initial-retry assertion; updated production PASS for CTA/MTA/BART/MBTA. Expanded in-flight and context-cancellation cases PASS.
+- **Broader tests:** all 24 standard host harnesses PASS before and after; normal Xcode Debug simulator build PASS with no project/signing edits. Firmware unchanged, so its target build was not repeated; all 13 firmware host tests passed in the combined suite. Protocol fixtures unchanged.
+- **Manual verification required:** none for the deterministic loop policy. Optional foreground UI smoke: load arrivals, interrupt networking across two refresh intervals, restore networking, verify retained rows/date and recovery; leave the view and confirm polling stops. This is not claimed as performed.
+- **Known remaining limitation:** tests step the timer, not wall-clock scheduling or real networking. Retained arrivals retain their old timestamp and are not declared newly fresh. User-triggered loading/error presentation remains existing behavior. No new permanent-error taxonomy was introduced.
+- **Intentionally terminal paths:** task cancellation/view teardown and periodic provider CancellationError still stop the old loop. The actual provider emits CancellationError on changed agency/location context; a new user/context refresh owns replacement work. Other serving failures have no existing UI-level permanent/terminal classification and can be retried at the normal cadence; persistent permission/configuration errors may therefore remain visible or logged until their cause changes.
+- **Commit message:** `fix(ui): keep nearby refresh alive after transient failures [F13]` (this F13 commit).
+- **Rollback:** revert only this F13 production/test commit to restore the previous policy and its matching characterization. No later cleanup changes are included. Historical report-only changes may need conflict resolution after future edits.
 
 ## Campaign disposition
 
-Ten production passes are committed. F13 is characterized but requires a product decision. C1–C7 have not started: the requested sequential gate prevents continuing through an unresolved policy pass. This is a partial campaign with an explicit stop, not a claim that the cleanup campaign is complete.
+Eleven production passes are committed, including the approved F13 policy. C1–C7 remain unstarted; this follow-up implements only F13 and does not mix cleanup into its commit. The policy blocker is resolved, while manual obligations for earlier passes remain.
 
 The separate commits are bounded, but accumulating reports and a shared registry make several raw `git revert` operations conflict. F01 also overlaps later local BLE guards. Prepared reverse patches in `rollback/` preserve unrelated later changes; see AggregateVerification for their actual verification limits. F09 rollback removes its cross-session assertion from the later F10 integration fixture while preserving F10's render-certainty fix. No history has been squashed or rewritten.
 
@@ -201,19 +202,18 @@ The separate commits are bounded, but accumulating reports and a shared registry
 | 5 | F12 | `fe53a58` | Deadline/refresh flow PASS | 22 host PASS | Optional wake | PASS | Bounded reverse patch; host-tested, see limits |
 | 6 | F11 | `27fc013` | Direction fixtures PASS | 23 host PASS | Required visual label | PASS — MANUAL VERIFICATION REQUIRED | Bounded reverse patch; host-tested, see limits |
 | 7A | F14 | `a7dc7a9` | Equal ETA identity PASS | 24 host PASS | Optional UI | PASS | Bounded reverse patch; host-tested, see limits |
-| 7B | F13 | `0598a14` | Stepped-clock policy PASS | 24 host PASS | No change | BLOCKED — DESIGN DECISION REQUIRED | Test/report only |
-| 8A | C1 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8B | C2 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8C | C3 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8D | C4 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8E | C5 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8F | C6 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
-| 8G | C7 | — | Not run | Not applicable | Not assessed | BLOCKED — prior-pass gate | No change |
+| 7B | F13 | This F13 commit | Four-agency recovery/cadence/cancellation PASS | 24 host PASS; Xcode PASS | Optional foreground UI smoke | PASS | Local model/test revert; no later production dependency |
+| 8A | C1 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8B | C2 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8C | C3 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8D | C4 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8E | C5 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8F | C6 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
+| 8G | C7 | — | Not run | Not applicable | Not assessed | Not started — separate cleanup campaign | No change |
 
 ## Deliberately unchanged
 
-- **F13:** choose continued 60-second nearby retry for all agencies, stop-until-user-refresh for all, or retain/document the existing difference. No production policy is inferred.
-- **C1–C7:** held at the explicit sequential gate. No documentation cleanup, runner redesign, dependency/provider/experiment deletion, grouping relocation or formatter cleanup was performed. Their merits have not been reassessed during this campaign.
+- **C1–C7:** not part of this F13-only follow-up. No documentation cleanup, runner redesign, dependency/provider/experiment deletion, grouping relocation or formatter cleanup was performed. Their merits have not been reassessed during this campaign.
 - **F06:** unsolicited developer-send framing; **F08:** setup/display-mode partial success; **F15:** freshness/retained-board contract; **F16:** station backfill; **F17:** platform identity/grouping; **F18:** ownership/authentication/security; **F19+:** provider/network policy. Explicitly outside scope.
 - **F07:** shared location waiters was not in the authorized implementation list.
 - Power architecture, BLE availability policy, renderer architecture, diagnostic firmware purge, provisioning, protocol versions and broad naming remain unchanged.
