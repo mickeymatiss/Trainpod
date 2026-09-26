@@ -93,9 +93,24 @@ No hardware checks have been run. These scenarios validate F01 only and will be 
 - **Commit message:** `fix(theme): scope confirmed theme to device [F05]`.
 - **Rollback:** one independent controller assignment and self-contained test harness; no dependency on earlier fixes.
 
+## Pass 3B — F09
+
+**PASS**
+
+- **Files changed:** `PhoneDiagnosticLog.swift`, `DiagnosticInterleave.swift`, the diagnostic TaskLocal context in `PayloadDelivery.swift`, diagnostic-only context/retention calls in `RefreshRequestHandler.swift`, new `tests/diagnostic_scope_test.swift`, its runner registration and reports.
+- **Behavioral problem:** identical boot/request text from different sessions shared a retention bucket and report group, allowing unrelated stages to fabricate a successful transaction.
+- **Characterization:** interleaved sessions A/B with transaction `1-1` first failed the two-group assertion on pre-fix code; fixed output has two incomplete traces rather than one invented success. Same-session legacy records still form one successful trace. Missing sessions do not join or pair spans. Six identical IDs across six sessions retain the newest five scoped transactions after the ordinary ring is evicted. A captured TaskLocal session stays old while the logger's current session changes to new.
+- **Production change:** key retained/report transactions by existing diagnostic session plus unchanged wire ID; keep unknown-session events explicitly separate. Extend the existing diagnostic TaskLocal context with the captured request session so late logging does not silently adopt the next device's session. This changes observability only: live ACK matching, request generations, transaction state, payload and firmware are untouched.
+- **Targeted tests:** `diagnostic_scope_test` red before / PASS after; `delivery_diagnostics_test` PASS. Example formatted report inspected: separate `session=a` and `session=b` traces, neither falsely successful. Raw input is not rewritten.
+- **Broader tests:** before 19 host PASS; after 20 host PASS, one compiled-only, one manual; Xcode Debug simulator build PASS. The separate theme simulator harness remains a previously passing check.
+- **Manual required:** none to establish deterministic grouping/retention; optional F09-M1 capture/export after two-device use during the final smoke session and confirm separate session labels.
+- **Known limitation:** sessions are the existing per-connection random identifiers, not new globally unique physical IDs. Separate connections to the same physical device remain separate traces; historical logs without session evidence cannot be safely reconstructed as one transaction. Their missing evidence is labeled, not guessed. This pass does not invent new metadata, secrets or hardware identifiers.
+- **Commit message:** `fix(diagnostics): scope transaction identity [F09]`.
+- **Rollback:** one observability-only commit; no dependent live BLE behavior changes.
+
 ## Campaign progress
 
-F01–F05 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
+F01–F05 and F09 have been implemented. Subsequent passes are not yet evaluated; they are not classified as blocked or safe. The campaign continues in the requested order, with independent commits.
 
 | Pass | Finding | Commit | Targeted Tests | Full Suite | Manual Test Needed | Result | Rollback Safe |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -107,8 +122,10 @@ F01–F05 have been implemented. Subsequent passes are not yet evaluated; they a
 
 | 2 | F04 | `ef8e34d` | CTA cache fixtures: PASS (red before fix) | 19 host PASS; Xcode PASS | No | PASS | Yes, isolated cache policy |
 
-| 3A | F05 | See delivered commit ID | Actual controller simulator: PASS (red before fix) | 19 host PASS; Xcode PASS | F05-M1–M2 | PASS — MANUAL VERIFICATION REQUIRED | Yes, one controller assignment |
+| 3A | F05 | `708640f` | Actual controller simulator: PASS (red before fix) | 19 host PASS; Xcode PASS | F05-M1–M2 | PASS — MANUAL VERIFICATION REQUIRED | Yes, one controller assignment |
+
+| 3B | F09 | See delivered commit ID | Scope/retention + existing diagnostics PASS | 20 host PASS; Xcode PASS | Optional export smoke | PASS | Yes, diagnostics only |
 
 ## Deliberately unchanged
 
-F09, F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.
+F10, F12, F11, F14, F13 and C1–C7 await their separate passes. F06, F08, F15–F19+, security/ownership, provisioning, renderer, power architecture, provider policy, protocol and broad naming changes remain explicitly out of scope. F07 shared location waiters was not in the authorized pass list and remains unchanged.

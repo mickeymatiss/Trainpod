@@ -71,7 +71,7 @@ final class RefreshRequestHandler: ObservableObject {
     deinit { sendTask?.cancel(); deadlineTask?.cancel() }
 
     private func receiveRequest(at timestamp: Date, backgrounded: Bool, transaction: PayloadTransaction?) {
-        if let transaction { PhoneDiagnosticLog.shared.retainTransaction(transaction.id) }
+        if let transaction { PhoneDiagnosticLog.shared.retainTransaction(transaction.id, sessionId: bluetooth.diagnosticSessionId) }
         PhoneDiagnosticLog.shared.record("DEVICE_DATA_REQUEST_RECEIVED", sessionId: bluetooth.diagnosticSessionId, transactionId: transaction?.id)
         guard !bluetooth.diagnosticsInProgress else { return }
         requestCount = defaults.integer(forKey: "backgroundRefreshRequestCount") + 1
@@ -170,6 +170,7 @@ final class RefreshRequestHandler: ObservableObject {
         }
         sendTask = Task { [weak self] in
             guard let self else { return }
+            await PhoneDiagnosticContext.$sessionId.withValue(diagnosticSession) {
             await PhoneDiagnosticContext.$transactionId.withValue(transaction?.id) {
             defer {
                 // Failed/cancelled resolution is retryable, never a completed payload.
@@ -249,6 +250,7 @@ final class RefreshRequestHandler: ObservableObject {
                     }
                 }
                 print("[E2E] \(self.status)")
+            }
             }
             }
         }

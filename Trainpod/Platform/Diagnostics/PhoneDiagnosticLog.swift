@@ -24,16 +24,30 @@ nonisolated final class PhoneDiagnosticLog: @unchecked Sendable {
     let processId = UUID().uuidString
     private let lock = NSLock()
     private var entries: [PhoneDiagnosticEvent] = []
-    private var transactionOrder: [String] = []
-    private var transactionEvents: [String: [PhoneDiagnosticEvent]] = [:]
+    private struct TransactionKey: Hashable {
+        let session: String
+        let transaction: String
+        init?(session: String, transaction: String) {
+            let session = session.lowercased()
+            guard !session.isEmpty, session != "00000000" else { return nil }
+            self.session = session
+            self.transaction = transaction
+        }
+    }
+    private var transactionOrder: [TransactionKey] = []
+    private var transactionEvents: [TransactionKey: [PhoneDiagnosticEvent]] = [:]
     private var sequence: UInt64 = 0
     private var session = ""
-    var currentSessionId: String { lock.lock(); defer { lock.unlock() }; return session }
+    var currentSessionId: String {
+        if let scoped = PhoneDiagnosticContext.sessionId { return scoped }
+        lock.lock(); defer { lock.unlock() }; return session
+    }
     func setSession(_ id: String) { lock.lock(); session = id; lock.unlock() }
-    func retainTransaction(_ id: String) {
+    func retainTransaction(_ id: String, sessionId: String? = nil) {
         lock.lock(); defer { lock.unlock() }
-        guard !transactionOrder.contains(id) else { return }
-        transactionOrder.append(id); transactionEvents[id] = []
+        guard let key = TransactionKey(session: sessionId ?? PhoneDiagnosticContext.sessionId ?? session, transaction: id),
+              !transactionOrder.contains(key) else { return }
+        transactionOrder.append(key); transactionEvents[key] = []
         while transactionOrder.count > 5 { transactionEvents.removeValue(forKey: transactionOrder.removeFirst()) }
     }
     func record(_ code: String, sessionId: String? = nil, level: String = "INFO", value1: Int64 = 0, value2: Int64 = 0, transactionId: String? = nil, chunk: Int? = nil, chunks: Int? = nil, bytes: Int? = nil, writeMode: String? = nil, durationMs: Int64? = nil, errorCode: String? = nil) {
@@ -43,12 +57,13 @@ nonisolated final class PhoneDiagnosticLog: @unchecked Sendable {
         let event = PhoneDiagnosticEvent(sequence: sequence,
             unixTimeMs: Int64(Date().timeIntervalSince1970 * 1000),
             uptimeMs: UInt64(ProcessInfo.processInfo.systemUptime * 1000),
-            sessionId: sessionId ?? session, eventCode: code, level: level, value1: value1, value2: value2, transactionId: tx, chunk: chunk, chunks: chunks, bytes: bytes,
+            sessionId: sessionId ?? PhoneDiagnosticContext.sessionId ?? session, eventCode: code, level: level, value1: value1, value2: value2, transactionId: tx, chunk: chunk, chunks: chunks, bytes: bytes,
             writeMode: writeMode, durationMs: durationMs, errorCode: errorCode)
         entries.append(event)
-        if let tx, transactionEvents[tx] != nil, !code.contains("CHUNK") {
-            transactionEvents[tx]!.append(event)
-            if transactionEvents[tx]!.count > 64 { transactionEvents[tx]!.remove(at: 1) }
+        if let tx, let key = TransactionKey(session: event.sessionId, transaction: tx),
+           transactionEvents[key] != nil, !code.contains("CHUNK") {
+            transactionEvents[key]!.append(event)
+            if transactionEvents[key]!.count > 64 { transactionEvents[key]!.remove(at: 1) }
         }
         if entries.count > 512 { entries.removeFirst(entries.count - 512) }
     }

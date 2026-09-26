@@ -39,4 +39,5 @@ nonisolated enum PayloadDelivery {
 
 nonisolated enum PhoneDiagnosticContext {
     @TaskLocal static var transactionId: String?
+    @TaskLocal static var sessionId: String?
 }

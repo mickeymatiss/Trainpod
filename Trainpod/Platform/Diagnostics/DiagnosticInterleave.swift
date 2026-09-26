@@ -185,7 +185,8 @@ nonisolated enum DiagnosticInterleave {
             var pending: [String: [Int]] = [:]
             for i in indices {
                 let event = events[i]
-                let key = "\(event.source)|\(event.boot ?? "?")|\(event.session)|\(event.transaction ?? "-")"
+                let sessionScope = event.session == "unassigned" && event.transaction != nil ? event.id : event.session
+                let key = "\(event.source)|\(event.boot ?? "?")|\(sessionScope)|\(event.transaction ?? "-")"
                 if event.code == pair.start { pending[key, default: []].append(i); continue }
                 guard pair.ends.contains(event.code) else { continue }
                 let candidates = pending[key] ?? []
@@ -328,19 +329,31 @@ nonisolated enum DiagnosticInterleave {
         return out.joined(separator: "\n") + "\n"
     }
 
+    private struct PayloadScope: Hashable {
+        let transaction: String
+        let session: String
+        let unassignedEvent: String
+    }
+
     private static func payloadTransactions(_ events: [Event], collected: Int64?) -> [String] {
-        let ids = Set(events.compactMap(\.transaction))
-        guard !ids.isEmpty else { return ["No transaction IDs in this export (legacy firmware/app or no retained requests)."] }
-        let groups = ids.map { id in (id, events.filter { $0.transaction == id }) }.sorted {
+        let identified = events.filter { $0.transaction != nil }
+        guard !identified.isEmpty else { return ["No transaction IDs in this export (legacy firmware/app or no retained requests)."] }
+        let groups = Dictionary(grouping: identified) { event in
+            // Without session evidence, even equal boot/request IDs do not prove
+            // common ownership. Keep each unassigned event explicitly separate.
+            PayloadScope(transaction: event.transaction!, session: event.session,
+                         unassignedEvent: event.session == "unassigned" ? event.id : "")
+        }.map { ($0.key, $0.value) }.sorted {
             let a = $0.1.compactMap(\.unix).min() ?? .max, b = $1.1.compactMap(\.unix).min() ?? .max
-            return a == b ? $0.0 < $1.0 : a < b
+            return a == b ? ($0.0.transaction, $0.0.session, $0.0.unassignedEvent) < ($1.0.transaction, $1.0.session, $1.0.unassignedEvent) : a < b
         }
         var output: [String] = []
         let stages = Set(["DATA_REQUEST_SENT", "DEVICE_DATA_REQUEST_RECEIVED", "DATA_REQUEST_COALESCED", "FETCH_STARTED", "FETCH_SUCCESS", "FETCH_FAILURE",
             "BLE_RESPONSE_BEGIN", "BLE_RESPONSE_QUEUED", "BLE_RESPONSE_WRITE_CONFIRMED", "BLE_RESPONSE_WRITE_FAILED",
             "RESPONSE_RX_STARTED", "RESPONSE_RX_COMPLETE", "RESPONSE_RX_FAILED", "PAYLOAD_PARSE_STARTED", "PAYLOAD_PARSE_SUCCESS", "PAYLOAD_PARSE_FAILURE",
             "DATA_APPLIED", "DATA_APPLIED_ACK_RECEIVED", "DATA_APPLIED_ACK_REJECTED", "DATA_APPLIED_ACK_TIMEOUT", "DISPLAY_UPDATED"])
-        for (id, trace) in groups {
+        for (scope, trace) in groups {
+            let id = scope.transaction
             func has(_ code: String) -> Bool { trace.contains { $0.code == code } }
             let start = trace.first { $0.code == "DATA_REQUEST_SENT" } ?? trace.first!
             let latest = trace.compactMap(\.unix).max()
@@ -364,6 +377,7 @@ nonisolated enum DiagnosticInterleave {
             let end = trace.last { $0.code == "DISPLAY_UPDATED" } ?? trace.last { $0.code == "DATA_APPLIED_ACK_RECEIVED" } ?? trace.last!
             let duration = start.source == end.source ? end.uptime-start.uptime : (start.unix != nil && end.unix != nil ? end.unix!-start.unix! : nil)
             output.append("TRANSACTION \(id) — \(outcome)" + (duration.map { " — ≈"+String(format: "%.3fs",Double($0)/1000) } ?? ""))
+            output.append(scope.session == "unassigned" ? "  session=unassigned; events not joined" : "  session=\(scope.session)")
             output.append("  Classification describes retained stage evidence, not a hardware root cause. Missing stages can also reflect unavailable logs.")
             for event in trace where stages.contains(event.code) || event.level == "WARN" || event.level == "ERROR" {
                 let relative = event.source == start.source ? event.uptime-start.uptime : (event.unix != nil && start.unix != nil ? event.unix!-start.unix! : nil)
