@@ -82,9 +82,13 @@ import Foundation
         assert(unknown[0].directions[0].name == "Direction TBD")
         let mixed = MTAClient.nextTrains(for: [stations[0]], predictions: axes + feed.predictions, now: now)
         assert(mixed[0].directions.count == 4)
+        let mixedPayload = try LiveTransitFormatter.payload(from: mixed)
+        assert(String(decoding: mixedPayload, as: UTF8.self).components(separatedBy: "\nP\t").count - 1 == 4)
+        var overCapacity = mixed
+        overCapacity[0] = StationArrivals(station: mixed[0].station, directions: mixed[0].directions + [DirectionArrivals(id: "unknown-extra", name: "Other", trains: [])])
         do {
-            _ = try LiveTransitFormatter.payload(from: mixed)
-            assertionFailure("Extra platform groups silently truncated")
+            _ = try LiveTransitFormatter.payload(from: overCapacity)
+            assertionFailure("More than four MTA groups must not silently truncate")
         } catch LiveTransitError.platformCapacityExceeded {} catch { throw error }
         let ctaStation = CTAStation(id: "CTA-one", name: "CTA", latitude: 41, longitude: -87, mapID: "1", stopIDs: ["1"])
         let cta = StationArrivals(station: ctaStation, directions: [DirectionArrivals(id: "N", name: "North", trains: [first[0]])])

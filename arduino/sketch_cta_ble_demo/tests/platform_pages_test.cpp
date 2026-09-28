@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
   ArrivalBoard replacement;
   assert(decodeArrivalPayload(complete("TP2\nChicago\nP\tLoop\tChicago\n"),replacement)==ArrivalPayloadResult::valid);
   state.setBoard(replacement,2); assert(state.platform==0 && state.current().stationName=="Chicago");
-  assert(decodeArrivalPayload(complete("TP2\nGrand\nP\tN\nP\tS\nP\tE\nP\tW\nP\tLoop\n"),replacement)==ArrivalPayloadResult::invalid);
+  assert(decodeArrivalPayload(complete("TP2\nGrand\nP\tN\nP\tS\nP\tE\nP\tW\nP\tLoop\nP\t6\nP\t7\nP\t8\nP\t9\n"),replacement)==ArrivalPayloadResult::invalid);
   assert(replacement.platformCount==1);
   if(argc>1) {
     std::ifstream input(argv[1]); std::string data((std::istreambuf_iterator<char>(input)),{});

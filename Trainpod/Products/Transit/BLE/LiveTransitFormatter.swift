@@ -2,9 +2,9 @@ import Foundation
 
 /// Transit adapter for the agency-neutral TP2 arrival board. Firmware and app use TP2 together.
 struct LiveTransitFormatter {
-    static let maximumPlatforms = 4 // n: increase with the firmware capacity.
+    static let maximumPlatforms = 8 // n: increase with the firmware capacity.
     static let maximumStations = 2
-    static let platformsPerStation = 2
+    static let platformsPerStation = 4
     static let arrivalsPerPlatform = 9
     static let arrivalsWithoutTimeCutoff = 3
     static let arrivalWindowSeconds: TimeInterval = 30 * 60

@@ -30,7 +30,7 @@ On a fixture mismatch, inspect the production behavior and protocol intent; do n
 
 ## Campaign harnesses and manual boundary
 
-The default runner currently executes 24 harnesses (11 Swift, 13 C++). The MTA
+The default runner currently executes 25 harnesses (11 Swift, 14 C++). The MTA
 live smoke is compiled only unless --live is explicitly requested. The legacy
 eta_render_test is manual and excluded from the executed/pass count.
 

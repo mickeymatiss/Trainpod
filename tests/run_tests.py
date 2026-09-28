@@ -6,7 +6,7 @@ p=argparse.ArgumentParser();p.add_argument('--output',type=pathlib.Path);p.add_a
 out=(args.output or pathlib.Path(tempfile.mkdtemp(prefix='keytrain-tests-'))).resolve()
 if out==ROOT or ROOT in out.parents: p.error('--output must be outside the checkout')
 out.mkdir(parents=True,exist_ok=True)
-for generated in ('platform.txt','mta.txt'):
+for generated in ('platform.txt','mta.txt','eight-platforms.txt'):
     (out/generated).unlink(missing_ok=True)
 resource.setrlimit(resource.RLIMIT_CORE,(0,0))
 results=[]
@@ -33,7 +33,7 @@ def run(name,command,arguments=(),execute=True):
 P='Trainpod/Products/Transit/'
 common=['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/MTAStationRepository.swift',P+'Data/API/MTAClient.swift',P+'Data/API/MTAGTFSRealtime.swift',P+'BLE/LiveTransitFormatter.swift',P+'BLE/TransitMessage.swift',P+'Systems/TransitSystemID.swift','Trainpod/Platform/Transport/PayloadDelivery.swift']
 manifest=[P+'Models/TransitSystemManifest.swift']+[str(x.relative_to(ROOT)) for x in sorted((ROOT/P/'Manifest').glob('*.swift'))]
-swift=[('platform_formatter_test',common,[out/'platform.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
+swift=[('platform_formatter_test',common,[out/'platform.txt',out/'eight-platforms.txt']),('mta_arrivals_test',common,[out/'mta.txt']),('transit_manifest_test',common+manifest,[ROOT/'tests/fixtures/manifests'])]
 extra={'nearby_arrival_identity_test':([P+'Data/Models/TransitModels.swift',P+'UI/Nearby/NearbyArrivalETA.swift'],[]), 'diagnostic_render_test':(['Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-render-reports.txt']), 'diagnostic_scope_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[out/'diagnostic-scope-report.txt']), 'cta_cache_test':(['tests/support/HostSupport.swift',P+'Data/Models/TransitModels.swift',P+'Data/CTAStationRepository.swift'],[]), 'ble_write_wait_test':(['Trainpod/Platform/BLE/BLEWriteWait.swift'],[]), 'protocol_contract_test':(common,[ROOT/'tests/fixtures/protocol']), 'delivery_diagnostics_test':(['Trainpod/Platform/Transport/PayloadDelivery.swift','Trainpod/Platform/Transport/DeliveryAcknowledgements.swift','Trainpod/Platform/Diagnostics/PhoneDiagnosticLog.swift','Trainpod/Platform/Diagnostics/DiagnosticPacket.swift','Trainpod/Platform/Diagnostics/DiagnosticInterleave.swift'],[]),'realtime_validation_test':(common+manifest+[P+'Models/TransitRealtimeSnapshot.swift',P+'Realtime/RealtimeResolver.swift',P+'Realtime/RealtimeTransitClient.swift',P+'Realtime/RealtimeTransitService.swift'],[ROOT/'tests/fixtures/manifests'])}
 for name,(sources,arguments) in extra.items():
     if (ROOT/'tests'/f'{name}.swift').exists():swift.append((name,sources,arguments))
@@ -46,7 +46,7 @@ for test in sorted((fw/'tests').glob('*_test.cpp')):
     name=test.stem
     if name=='eta_render_test':
         results.append(dict(test=name,status='MANUAL — legacy harness retained',command=[]));print(name+': PRESENT; MANUAL (not compiled or executed)',flush=True);continue
-    arguments={'platform_pages_test':[out/'platform.txt'],'mta_arrivals_contract_test':[out/'mta.txt'],'protocol_contract_test':[ROOT/'tests/fixtures/protocol']}.get(name,[])
+    arguments={'eight_platforms_test':[out/'eight-platforms.txt'],'platform_pages_test':[out/'platform.txt'],'mta_arrivals_contract_test':[out/'mta.txt'],'protocol_contract_test':[ROOT/'tests/fixtures/protocol']}.get(name,[])
     # Prefix binary/log name to distinguish the C++ and Swift shared-contract tests.
     binary='firmware_'+name
     cmd=['clang++','-std=c++17','-Wall','-Wextra',str(test),'-o',str(out/binary)]

@@ -21,7 +21,7 @@ struct PlatformDisplay {
 };
 
 struct ArrivalBoard {
-  static constexpr size_t MaximumPlatforms = 4; // n: normalized pages, no agency logic.
+  static constexpr size_t MaximumPlatforms = 8; // n: normalized pages, no agency logic.
   std::array<PlatformDisplay, MaximumPlatforms> platforms;
   size_t platformCount = 0;
 };
