@@ -107,10 +107,6 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
   const int width=gfx.width();
   auto* pixels=navigationCanvas->getFramebuffer();
   const ArrivalDisplay empty{"",0,"",-1};
-  const int lightState=int(platformDip.lightOpacity)+(platformDip.lightReady ? 256 : 0);
-  const bool lightsChanged=transitionPaintedLights!=lightState;
-  const bool contentChanged=lightsChanged || transitionPaintedNames!=platformDip.nameOpacity ||
-    transitionPaintedDestinations!=platformDip.destinationOpacity;
   for(size_t group=0;group<visibleSlots()+2;++group) {
     const auto& phase=platformDip.groups[group];
     const auto& source=transitionSource[group];
@@ -132,11 +128,10 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
           (!a.routeLabel.empty() && !b.routeLabel.empty() && a.routeColor!=b.routeColor)) fields|=2;
       if(routeAbbreviation(a.routeLabel)!=routeAbbreviation(b.routeLabel)) fields|=4;
       if(a.destination!=b.destination) fields|=8;
-      fields|=15; // New screens cycle all arrival fields on shared, non-staggered clocks.
+      fields|=15; // Each arrival cell reveals all its fields on its own clock.
     }
     if(!fields || (transitionPaintedOpacity[group]==phase.opacity &&
-        transitionPaintedIncoming[group]==phase.incoming &&
-        (!(group>=1 && group<=visibleSlots()) || !contentChanged))) continue;
+        transitionPaintedIncoming[group]==phase.incoming)) continue;
     const auto& platform=phase.incoming ? target : source;
     const size_t page=phase.incoming ? state.page : transitionSourcePage[group];
     const int x=group==footerGroup() ? (width-87)/2 : group==0 ? 8 : cellX(group-1);
@@ -191,16 +186,7 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
       for(int col=0;col<=w;++col) {
         const bool paint=col<w && dynamicPixel(x+col,y+row);
         if(paint) {
-          uint8_t opacity=phase.opacity;
-          if(group>=1 && group<=visibleSlots()) {
-            const size_t slot=group-1;
-            const int px=x+col;
-            if(px>=lineX(slot) && px<lineX(slot)+routeSize) opacity=platformDip.lightOpacity;
-            else if(px>=nameX(slot) && px<nameX(slot)+nameRegionWidth(slot)) opacity=platformDip.nameOpacity;
-            else if(!state.compact && px>=181) opacity=platformDip.destinationOpacity;
-            else if(px>=cellX(slot)+2 && px<cellX(slot)+52) opacity=platformDip.numberOpacity;
-          }
-          line[col]=DisplayEffects::fade565(line[col],transitionShell[row*w+col],opacity);
+          line[col]=DisplayEffects::fade565(line[col],transitionShell[row*w+col],phase.opacity);
           if(run<0) run=col;
         } else if(run>=0) {
           gfx.draw16bitRGBBitmap(x+run,y+row,line+run,col-run,1);
@@ -213,9 +199,6 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
     transitionPaintedOpacity[group]=phase.opacity;
     transitionPaintedIncoming[group]=phase.incoming;
   }
-  transitionPaintedLights=lightState;
-  transitionPaintedNames=platformDip.nameOpacity;
-  transitionPaintedDestinations=platformDip.destinationOpacity;
   drawingTarget=nullptr;
 }
 
