@@ -21,12 +21,15 @@ struct RenderOp { std::string kind; int x,y,w,h; uint16_t color; };
 class Arduino_GFX {
 public:
   std::vector<RenderOp> ops;
+  std::vector<uint16_t> bitmap;
+  unsigned boundsCalls=0;
   const GFXfont* font=nullptr; uint8_t scale=1; int cx=0,cy=0; uint16_t color=0;
   int width()const{return 320;} int height()const{return 172;}
   void setFont(const GFXfont* f){font=f;} void setTextSize(uint8_t s){scale=s;}
   void setTextWrap(bool){} void setTextColor(uint16_t c){color=c;}
   void setCursor(int x,int y){cx=x;cy=y;}
   void getTextBounds(const String& s,int x,int y,int16_t* bx,int16_t* by,uint16_t* w,uint16_t* h) {
+    ++boundsCalls;
     int left=10000,top=10000,right=-10000,bottom=-10000;
     for(unsigned char c:s.s) {
       if(!font || c<font->first || c>font->last) continue;
@@ -50,7 +53,7 @@ public:
   void drawRect(int x,int y,int w,int h,uint16_t c){ops.push_back({"outline",x,y,w,h,c});}
   void fillTriangle(int x,int y,int,int,int,int,uint16_t c){ops.push_back({"triangle",x,y,1,1,c});}
   void drawLine(int x,int y,int,int,uint16_t c){ops.push_back({"line",x,y,1,1,c});}
-  void draw16bitRGBBitmap(int x,int y,uint16_t*,int w,int h){ops.push_back({"bitmap",x,y,w,h,0});}
+  void draw16bitRGBBitmap(int x,int y,uint16_t* p,int w,int h){ops.push_back({"bitmap",x,y,w,h,0});bitmap.assign(p,p+w*h);}
 };
 class Arduino_Canvas : public Arduino_GFX {
 public:

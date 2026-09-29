@@ -1,13 +1,46 @@
 #include "../../../platform/diagnostics/SerialLog.h"
 #include "ArrivalScreen.h"
 #include "theme/pallete.h"
+#include "fonts/ArrivalItalic18.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
 
+void ArrivalScreen::drawEta(size_t slot,int value,uint8_t opacity,bool /*clear*/) {
+  if(etaRimValid[slot] && etaCachedValue[slot]==value) {
+    presentEta(slot,opacity);
+    return;
+  }
+  const std::string eta=value<0 ? "" : std::to_string(value);
+  surface().setTextWrap(false);
+  surface().setTextSize(1);
+  const GFXfont* font=&FreeSansBoldOblique18pt7b;
+  surface().setFont(font);
+  int16_t bx=0,by=0; uint16_t w=0,h=0;
+  surface().getTextBounds(eta.c_str(),0,0,&bx,&by,&w,&h);
+  renderEffectEta(slot,eta,font,opacity,bx,by,w,h,18);
+  etaCachedValue[slot]=value;
+}
+
+void ArrivalScreen::presentEta(size_t slot,uint8_t opacity) {
+  const uint16_t bg=pallete::arrivalBadge();
+  for(int y=0;y<28;++y) for(int x=0;x<50;++x) {
+    const int source=(y+2)*54+x+2;
+    const auto color=etaPixels[slot][source];
+    // The rim and rounded exterior stay at their normal colors throughout.
+    const int sx=x+2,sy=y+2;
+    const int cx=sx<10 ? 10-sx : sx>=44 ? sx-43 : 0;
+    const int cy=sy<10 ? 10-sy : sy>=22 ? sy-21 : 0;
+    const bool fixed=etaRimMask[slot][source] || (cx && cy && cx*cx+cy*cy>100);
+    etaFrame[y*50+x]=fixed || opacity==255 ? color : DisplayEffects::fade565(color,bg,opacity);
+  }
+  // Pack the interior contiguously: one address window instead of 28 rows.
+  surface().draw16bitRGBBitmap(cellX(slot)+2,cellY(slot)+2,etaFrame.data(),50,28);
+}
+
 void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const GFXfont* font,uint8_t opacity,int bx,int by,int w,int h,int fontPoints) {
   auto& pixels=etaPixels[slot];
-  const uint16_t bg=pallete::arrivalBadge(),fg=pallete::arrivalBadgeText(opacity);
+  const uint16_t bg=pallete::arrivalBadge(),fg=pallete::arrivalBadgeText(255);
   // Preserve the rounded badge silhouette even at large bloom radii.
   for(int y=0;y<32;++y) for(int x=0;x<54;++x) {
     if(etaRimValid[slot] && etaRimMask[slot][y*54+x]) continue;
@@ -44,8 +77,8 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
       value.c_str(),w,h,bx,by,fontPoints,uniformScale,uniformScale,clipW,clipH);
     etaLoggedValue[slot]=value;etaLoggedScale[slot]=uniformScale;
   }
-  // Inverse-sample once, so integer rounding cannot collapse forward-mapped
-  // columns onto each other. Every visual layer uses this exact same mask.
+  // Inverse-sample only when preparing a new cached image. Every visual layer
+  // uses this same mask; opacity-only frames never enter this function.
   auto& ink=etaInk;
   ink.fill(0);
   for(int y=0;y<inkH;++y) for(int x=0;x<inkW;++x) {
@@ -77,10 +110,10 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
       glyphs(offsets[i][0]*effects.radius+effects.biasX,offsets[i][1]*effects.radius+effects.biasY,DisplayEffects::mix(bg,fg,effects.intensity));
   }
   if(effects.depth) {
-    // Darken the full-strength parent color first, then apply the same fade as
-    // the primary numeral. At opacity zero both layers are exactly background.
+    // Cache the full-strength darkened layer. Presentation fades the complete
+    // image so depth and primary numerals disappear together.
     const uint16_t body=DisplayEffects::scale565(pallete::arrivalBadgeText(255),100-effects.depthDarken);
-    glyphs(effects.depthX,effects.depthY,DisplayEffects::fade565(body,bg,opacity));
+    glyphs(effects.depthX,effects.depthY,body);
   }
   glyphs(0,0,fg);
   // Cache the rim at its normal color so ETA fades never erase or dim it.
@@ -92,9 +125,7 @@ void ArrivalScreen::renderEffectEta(size_t slot,const std::string& value,const G
     }
     etaRimValid[slot]=true;
   }
-  // Only the numeric interior is transferred, never the capsule's rounded edges.
-  for(int y=2;y<30;++y)
-    surface().draw16bitRGBBitmap(cellX(slot)+2,top+y,pixels.data()+y*54+2,50,1);
+  presentEta(slot,opacity);
 }
 
 void ArrivalScreen::printEffects(bool help) {

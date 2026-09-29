@@ -33,9 +33,14 @@ private:
   void drawGaugeBezel(int x,int y,int width,int height,int radius,uint16_t baseColor);
   void printEffects(bool help);
   void renderEffectEta(size_t slot,const std::string& value,const GFXfont* font,uint8_t opacity,int bx,int by,int w,int h,int fontPoints);
+  void presentEta(size_t slot,uint8_t opacity);
   // Single-worker renderer: one reusable glyph scratch mask for all cells.
   std::array<uint8_t,54*32> etaInk{};
   std::array<std::array<uint16_t,54*32>,6> etaPixels{};
+  // Full-strength images; opacity is deliberately not part of the cache key.
+  // Theme, effects and layout changes invalidate etaRimValid and these images.
+  std::array<int,6> etaCachedValue{};
+  std::array<uint16_t,50*28> etaFrame{};
   std::array<std::array<uint8_t,54*32>,6> etaRimMask{};
   std::array<bool,6> etaRimValid{};
   std::array<std::string,6> etaLoggedValue;

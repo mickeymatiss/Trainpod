@@ -281,19 +281,6 @@ void ArrivalScreen::text(const std::string& value, int x, int baseline, int widt
   surface().print(fitted);
 }
 
-void ArrivalScreen::drawEta(size_t slot, int value, uint8_t opacity, bool clear) {
-  const std::string eta = value<0 ? "" : std::to_string(value);
-  surface().setTextWrap(false);
-  surface().setTextSize(1);
-  surface().setTextColor(etaColor(opacity));
-  int16_t bx=0, by=0; uint16_t w=0, h=0;
-  // One font for every value. The effect renderer fits both axes together.
-  const GFXfont* selected=&FreeSansBoldOblique18pt7b;
-  surface().setFont(selected);
-  surface().getTextBounds(eta.c_str(),0,0,&bx,&by,&w,&h);
-  renderEffectEta(slot,eta,selected,opacity,bx,by,w,h,18);
-}
-
 void ArrivalScreen::animateEtas(uint32_t now) {
   bool active=false;
   for (const auto& fade:etaFades) active=active || fade.active;
