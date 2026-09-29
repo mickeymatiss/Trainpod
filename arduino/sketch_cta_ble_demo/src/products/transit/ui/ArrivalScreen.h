@@ -78,6 +78,8 @@ private:
   uint16_t neutralLineColor() const;
   void drawTheme(uint32_t now);
   bool themeDirty = false;
+  bool loadingShown=false,awaitingFirstData=true;
+  bool drawLoadingOrInitialShell(uint32_t now);
   void drawFooter(uint32_t now);
   void drawScreenLip(bool footerOnly=false);
   void drawDistanceGauge(const std::string& value, const std::string& unit);

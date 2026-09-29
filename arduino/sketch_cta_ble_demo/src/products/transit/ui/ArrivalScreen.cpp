@@ -60,6 +60,7 @@ void ArrivalScreen::applySnapshot(const RenderSnapshot& snapshot,uint32_t now) {
 }
 bool ArrivalScreen::pending() const {
   if(suspended) return false;
+  if(!state.hasData) return dirty || themeDirty || !loadingShown;
   if(dirty || themeDirty || platformDip.active || springBlock.moving()) return true;
   for(const auto& fade:etaFades) if(fade.active) return true;
   return false;
@@ -228,6 +229,7 @@ void ArrivalScreen::setBatteryPercent(int percent) {
 }
 void ArrivalScreen::tick(uint32_t now) {
   if (suspended || renderError) return;
+  if (drawLoadingOrInitialShell(now)) return;
   if (themeDirty) { drawTheme(now); if (themeDirty) return; }
   if (restartConnectionTimer) { connectionAttemptStarted = now; restartConnectionTimer = false; }
   const bool failed = !connected && uint32_t(now - connectionAttemptStarted) >= CONNECTION_WARNING_MS;
@@ -400,7 +402,7 @@ void ArrivalScreen::themeChanged(uint32_t now) {
   hasRendered = false;
   dirty = true;
   themeDirty = true;
-  if (!suspended) drawTheme(now);
+  if (!suspended && !drawLoadingOrInitialShell(now)) drawTheme(now);
 }
 
 void ArrivalScreen::drawTheme(uint32_t now) {

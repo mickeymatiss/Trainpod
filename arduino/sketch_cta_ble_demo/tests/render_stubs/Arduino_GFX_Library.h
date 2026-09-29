@@ -30,6 +30,7 @@ public:
   void setCursor(int x,int y){cx=x;cy=y;}
   void getTextBounds(const String& s,int x,int y,int16_t* bx,int16_t* by,uint16_t* w,uint16_t* h) {
     ++boundsCalls;
+    if(!font) { *bx=x;*by=y;*w=s.length()*6*scale;*h=8*scale;return; }
     int left=10000,top=10000,right=-10000,bottom=-10000;
     for(unsigned char c:s.s) {
       if(!font || c<font->first || c>font->last) continue;
