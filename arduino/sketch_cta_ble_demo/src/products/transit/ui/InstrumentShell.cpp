@@ -46,12 +46,12 @@ uint16_t ArrivalScreen::neutralLineColor() const {
 }
 
 void ArrivalScreen::drawLineWindow(size_t slot,const ArrivalDisplay* arrival) {
-  const int baseline=cellY(slot)+23;
+  const int top=lineY(slot);
   const bool populated=arrival && !arrival->routeLabel.empty();
   const uint16_t color=populated ? pallete::routeColor(*arrival) : neutralLineColor();
-  surface().fillRoundRect(lineX(slot),baseline-18,22,22,4,color);
+  surface().fillRoundRect(lineX(slot),top,routeSize,routeSize,4,color);
   // Route illumination changes inside a fixed, theme-derived frame.
-  if(bezel.route) drawGaugeBezel(lineX(slot),baseline-18,22,22,4,neutralLineColor());
+  if(bezel.route) drawGaugeBezel(lineX(slot),top,routeSize,routeSize,4,neutralLineColor());
   // Empty/off windows keep only the neutral lens and frame—no dots or route color.
 }
 

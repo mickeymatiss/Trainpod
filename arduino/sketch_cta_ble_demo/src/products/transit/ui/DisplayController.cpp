@@ -22,6 +22,9 @@ constexpr uint32_t RenderDeadlineMs=5000;
 // copy strings under a lock, or let the producer touch the worker's front slot.
 RenderSnapshot slots[3];
 std::atomic<unsigned> middle{1};
+#if KEYTRAIN_COLOR_CALIBRATION
+std::atomic<uint32_t> shownCalibration{0};
+#endif
 unsigned back=2,front=0;
 constexpr unsigned Pending=4;
 RenderSnapshot current; // Authoritative application state; app loop only.
@@ -101,6 +104,14 @@ void renderTask(void*) {
           if(!initialized) finish("LCD initialization");
           else {
             pallete::setRenderTheme(snapshot.theme);
+#if KEYTRAIN_COLOR_CALIBRATION
+            if(snapshot.calibration) {
+              // Raw LCD commands only: never apply a correction table here.
+              gfx.fillScreen(RGB565((snapshot.calibrationRGB>>16)&255,(snapshot.calibrationRGB>>8)&255,snapshot.calibrationRGB&255));
+              shownCalibration.store(snapshot.calibrationSequence,std::memory_order_release);
+              wasSetup=true;finish(nullptr);
+            } else
+#endif
             if(snapshot.setupState>=0) {
               drawSetup(gfx,snapshot.setupState);wasSetup=true;
             } else {
@@ -132,6 +143,14 @@ void renderTask(void*) {
 }
 }
 namespace DisplayController {
+#if KEYTRAIN_COLOR_CALIBRATION
+void setCalibration(bool enabled,uint32_t rgb,uint32_t sequence) {
+  current.calibration=enabled;current.calibrationRGB=rgb;current.calibrationSequence=sequence;
+  if(!enabled) shownCalibration.store(0,std::memory_order_release);
+  requestRender();
+}
+uint32_t calibrationShown() { return shownCalibration.load(std::memory_order_acquire); }
+#endif
 void begin() {
   if(started) return;
   started=true;
@@ -206,6 +225,9 @@ void tick(uint32_t now) {
     WarnLog.printf("RENDER_FAILED generation=%lu error=stall elapsed=%lums page=%lu; app continues\n",
       (unsigned long)gen,(unsigned long)(observedNow-began),(unsigned long)page);
   }
+#if KEYTRAIN_COLOR_CALIBRATION
+  if(!current.calibration)
+#endif
   if(current.setupState<0 && !current.suspended && current.board.tick(now)) dirty=true;
   if(!current.connected && !warningRequested && uint32_t(now-disconnectedAt)>=30000) {
     warningRequested=true;dirty=true;

@@ -3,6 +3,10 @@
 
 // Main-loop facade. Owns transit/selection/timers; never touches TFT hardware.
 namespace DisplayController {
+#if KEYTRAIN_COLOR_CALIBRATION
+void setCalibration(bool enabled,uint32_t rgb=0,uint32_t sequence=0);
+uint32_t calibrationShown();
+#endif
 void begin(); // App state and queues only; no TFT/task startup.
 void startRenderer(); // Called once after the first BLE poll.
 void setSetupState(int value);

@@ -14,6 +14,7 @@
 #include "../../../platform/metrics/MetricsStore.h"
 #include "../../../platform/power/PerformanceMode.h"
 #include <esp_timer.h>
+#include "../calibration/ColorCalibration.h"
 
 #include "../../../platform/device/DeviceHardware.h"
 BacklightFade backlight(LCD_BL);
@@ -21,6 +22,7 @@ bool screenDarkLogged = false;
 bool showingSetup=false;
 void drawSetup() { DisplayController::setSetupState(DeviceProvisioning::shared().state()); }
 bool handleUiSerialCommand(const char* command) {
+  if(ColorCalibration::command(command)) return true;
   if(NightBrightness::shared().command(command)) return true;
   return DisplayController::command(command);
 }
@@ -101,6 +103,7 @@ void setupTransitApp() {
   pallete::begin();
   DisplayMode::begin();
   backlight.begin();
+  ColorCalibration::begin(backlight);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   lastButtonReading = digitalRead(BUTTON_PIN);
   buttonState = HIGH; // A button held at boot still produces a debounced down edge.
@@ -117,6 +120,10 @@ void setupTransitApp() {
 
 void loopTransitApp() {
   const uint32_t now = millis();
+  if(ColorCalibration::active()) {
+    pollBleIntegration();DisplayController::startRenderer();DisplayController::tick(millis());
+    ColorCalibration::tick();delay(1);return;
+  }
   static bool firstLoop=true;
   static uint32_t lastHeartbeat=0;
   if(firstLoop || uint32_t(now-lastHeartbeat)>=5000) {
@@ -137,6 +144,7 @@ void loopTransitApp() {
     }
     lastButtonReading=reading;
     pollBleIntegration(); // Runs setup queue and continuous-advertising watchdog.
+    if(ColorCalibration::active()) { DisplayController::startRenderer();return; }
     DisplayController::startRenderer();
     drawSetup();
     DisplayController::tick(millis());
@@ -196,6 +204,7 @@ void loopTransitApp() {
   // Normal BLE sessions close in standby; an explicit button window may finish there.
   if (Serial.available()) setPerformanceMode(PerformanceMode::ACTIVE);
   pollBleIntegration();
+  if(ColorCalibration::active()) { DisplayController::startRenderer();return; }
   DisplayController::startRenderer(); // Only after BLE/serial have been serviced.
   MetricsStore::shared().tick(millis()); // Still flush periodically in screen-off standby.
   DiagnosticStore::shared().tick(millis());

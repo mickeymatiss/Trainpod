@@ -61,8 +61,10 @@ private:
   int cellX(size_t slot) const { return 8+(state.compact ? int(slot%2)*(gfx.width()/2) : 0); }
   int cellY(size_t slot) const { return 37+int(state.compact ? slot/2 : slot)*((gfx.height()-52)/3); }
   int cellRight(size_t slot) const { return state.compact ? cellX(slot)+gfx.width()/2-16 : gfx.width()-8; }
-  int lineX(size_t slot) const { return cellX(slot)+(state.compact ? 60 : 64); }
-  int nameX(size_t slot) const { return cellX(slot)+(state.compact ? 88 : 94); }
+  static constexpr int routeSize=28;
+  int lineX(size_t slot) const { return cellX(slot)+(state.compact ? 59 : 63); }
+  int lineY(size_t slot) const { return cellY(slot)+(32-routeSize)/2; }
+  int nameX(size_t slot) const { return cellX(slot)+(state.compact ? 94 : 100); }
   int nameWidth(size_t slot) const { return state.compact ? cellRight(slot)-nameX(slot) : 60; }
   int nameRegionWidth(size_t slot) const { return state.compact ? nameWidth(slot) : 63; }
   int routeRegionWidth(size_t slot) const { return nameX(slot)+nameRegionWidth(slot)-(lineX(slot)-2); }

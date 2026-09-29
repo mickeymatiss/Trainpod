@@ -178,8 +178,9 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
       const int slot=int(group)-1;
       if((fields&1) && px>=cellX(slot)+2 && px<cellX(slot)+52 && py>=y+2 && py<y+30)
         return !etaRimMask[slot][(py-y)*54+px-cellX(slot)];
-      if((fields&2) && GaugeBezel::inside(px-lineX(slot),py-y-5,22,22,4))
-        return !(bezel.route && bezel.rim(px-lineX(slot),py-y-5,22,22,4,(uint32_t(lineX(slot))<<16)|uint32_t(y+5)));
+      if((fields&2) && GaugeBezel::inside(px-lineX(slot),py-lineY(slot),routeSize,routeSize,4))
+        return !(bezel.route && bezel.rim(px-lineX(slot),py-lineY(slot),routeSize,routeSize,4,
+          (uint32_t(lineX(slot))<<16)|uint32_t(lineY(slot))));
       if((fields&4) && px>=nameX(slot) && px<nameX(slot)+nameRegionWidth(slot)) return true;
       return !state.compact && (fields&8) && px>=181 && px<width-8;
     };
@@ -194,7 +195,7 @@ void ArrivalScreen::renderPlatformFrame(uint32_t now) {
           if(group>=1 && group<=visibleSlots()) {
             const size_t slot=group-1;
             const int px=x+col;
-            if(px>=lineX(slot) && px<lineX(slot)+22) opacity=platformDip.lightOpacity;
+            if(px>=lineX(slot) && px<lineX(slot)+routeSize) opacity=platformDip.lightOpacity;
             else if(px>=nameX(slot) && px<nameX(slot)+nameRegionWidth(slot)) opacity=platformDip.nameOpacity;
             else if(!state.compact && px>=181) opacity=platformDip.destinationOpacity;
             else if(px>=cellX(slot)+2 && px<cellX(slot)+52) opacity=platformDip.numberOpacity;

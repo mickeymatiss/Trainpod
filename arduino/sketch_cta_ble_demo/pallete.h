@@ -2,6 +2,7 @@
 
 #include <Arduino_GFX_Library.h>
 #include "src/products/transit/data/ArrivalDisplay.h"
+#include "src/products/transit/ui/theme/DisplayColor.h"
 
 // Central display palette. BLE and NVS use RGB888; rendering uses RGB565.
 class pallete {
@@ -11,7 +12,9 @@ public:
   // RGB888 order matches the app and the version-1 BLE theme protocol.
   enum Role { Background, PrimaryText, Detail, SecondaryText, ArrivalBadge, ArrivalBadgeText, RoleCount };
   struct Theme { uint32_t rgb[RoleCount]; };
-  static void setRenderTheme(const Theme& theme) { renderTheme=theme; }
+  static void setRenderTheme(const Theme& theme) {
+    for(unsigned i=0;i<RoleCount;++i) renderTheme.rgb[i]=DisplayColor::corrected(theme.rgb[i]);
+  }
   static bool storeTheme(const Theme& theme);
   static bool valid(const Theme& theme);
   static uint32_t fingerprint(const Theme& theme);
@@ -43,8 +46,7 @@ public:
 
   static uint16_t routeColor(const ArrivalDisplay& arrival) {
     // Route identity comes only from transit data, never from the theme.
-    const uint32_t rgb = arrival.routeColor;
-    return RGB565((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255);
+    return DisplayColor::rgb565(arrival.routeColor);
   }
 
 private:
