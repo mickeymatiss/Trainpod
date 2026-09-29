@@ -18,6 +18,7 @@ void buttonChanged(bool value,uint32_t now);
 bool feedbackHeld();
 void themeChanged(uint32_t now);
 void suspend(uint32_t now);
+void blankStandbyScreen();
 void resume(uint32_t now);
 void tick(uint32_t now);
 uint32_t requestRender(uint64_t transaction=0);

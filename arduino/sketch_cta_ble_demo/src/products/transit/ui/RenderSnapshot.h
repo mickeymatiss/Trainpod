@@ -14,4 +14,5 @@ struct RenderSnapshot {
 #endif
   int batteryPercent=-1;
   bool connected=false, suspended=false, buttonDown=false;
+  bool blankScreen=false; // Requested only after the standby backlight fade.
 };

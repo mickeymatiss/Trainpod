@@ -215,6 +215,7 @@ void loopTransitApp() {
   backlight.update(millis()); // Continue fading even while rendering is suspended.
   if(!powerLifecycle.isStandby()) screenDarkLogged=false;
   else if(backlight.isDark() && !screenDarkLogged) {
+    DisplayController::blankStandbyScreen();
     InfoLog.println("Screen dark; standby (CPU awake)");
     screenDarkLogged=true;
   }

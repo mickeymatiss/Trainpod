@@ -104,6 +104,13 @@ void renderTask(void*) {
           if(!initialized) finish("LCD initialization");
           else {
             pallete::setRenderTheme(snapshot.theme);
+            if(snapshot.suspended && snapshot.blankScreen) {
+              // The renderer owns SPI. Never clear from the application task.
+              gfx.fillScreen(0); // Physical black, independent of theme/calibration.
+              screen.invalidate();wasSetup=true;
+              InfoLog.println("STANDBY_SCREEN_CLEARED");
+              finish(nullptr);
+            } else
 #if KEYTRAIN_COLOR_CALIBRATION
             if(snapshot.calibration) {
               // Raw LCD commands only: never apply a correction table here.
@@ -210,9 +217,13 @@ void suspend(uint32_t now) {
   if(current.suspended) return;
   current.suspended=true;suspendedAt=now;dirty=true;
 }
+void blankStandbyScreen() {
+  if(!current.suspended || current.blankScreen) return;
+  current.blankScreen=true;dirty=true;
+}
 void resume(uint32_t now) {
   if(!current.suspended) return;
-  current.suspended=false;current.board.pageStarted+=now-suspendedAt;
+  current.suspended=false;current.blankScreen=false;current.board.pageStarted+=now-suspendedAt;
   current.board.clockAdvanced+=now-suspendedAt;dirty=true;
 }
 void tick(uint32_t now) {
